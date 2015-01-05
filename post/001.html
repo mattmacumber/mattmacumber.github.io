@@ -1,0 +1,138 @@
+<!DOCTYPE HTML>
+<!--
+	Based on Strongly Typed by HTML5 UP
+	html5up.net | @n33co
+	Free for personal and commercial use under the CCA 3.0 license (html5up.net/license)
+-->
+<html>
+
+<head>
+    <title>Compute</title>
+    <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+    <meta name="description" content="a blog" />
+    <meta name="keywords" content="python computing math" />
+    <!--[if lte IE 8]><script src="/css/ie/html5shiv.js"></script><![endif]-->
+    <script src="/js/jquery.min.js"></script>
+    <script src="/js/jquery.dropotron.min.js"></script>
+    <script src="/js/skel.min.js"></script>
+    <script src="/js/skel-layers.min.js"></script>
+    <script src="/js/init.js"></script>
+    <noscript>
+        <link rel="stylesheet" href="/css/skel.css" />
+        <link rel="stylesheet" href="/css/style.css" />
+        <link rel="stylesheet" href="/css/style-desktop.css" />
+    </noscript>
+    <!--[if lte IE 8]><link rel="stylesheet" href="/css/ie/v8.css" /><![endif]-->
+</head>
+
+<body class="homepage">
+
+    <!-- Header -->
+    <div id="header-wrapper">
+        <div id="header" class="container">
+
+            <!-- Logo -->
+            <h1 id="logo"><a href="index.html">Compute</a></h1>
+            <p>Unfolding ideas via computation.</p>
+
+            <!-- Nav -->
+            <nav id="nav">
+                <ul>
+                    <li><a class="icon fa-home" href="/index.html"><span>Introduction</span></a>
+                    </li>
+                    <li><a class="icon fa-retweet" href="/about/"><span>About</span></a>
+                    </li>
+                    <li><a class="icon fa-cog" href="https://github.com/mattmacumber/"><span>GitHub</span></a>
+                    </li>
+                </ul>
+            </nav>
+
+        </div>
+    </div>
+
+    <!-- Main -->
+    <div id="main-wrapper">
+        <div id="main" class="container">
+            <div class="row">
+
+                <!-- Content -->
+                <div id="content" class="11u">
+
+                    <!-- Post -->
+                    <article class="box post">
+                        <header>
+                            <h2><a href="/post/001.html">A Mathematical Theory of Communication</a></h2>
+                        </header>
+                        <h3>By C. E. SHANNON</h3>
+                        <h4>INTRODUCTION</h4>
+                        <p>The recent development of various methods of modulation such as PCM and PPM which exchange
+                        bandwidth for signal-to-noise ratio has intensified the interest in a general theory of communication. A
+                        basis for such a theory is contained in the important papers of Nyquist and Hartley on this subject. In the
+                        present paper we will extend the theory to include a number of new factors, in particular the effect of noise
+                        in the channel, and the savings possible due to the statistical structure of the original message and due to the
+                        nature of the final destination of the information.</p>
+                        <p>The fundamental problem of communication is that of reproducing at one point either exactly or ap-
+                        proximately a message selected at another point. Frequently the messages have meaning ; that is they refer
+                        to or are correlated according to some system with certain physical or conceptual entities. These semantic
+                        aspects of communication are irrelevant to the engineering problem. The significant aspect is that the actual
+                        message is one selected from a set of possible messages. The system must be designed to operate for each
+                        possible selection, not just the one which will actually be chosen since this is unknown at the time of design.</p>
+                        <p>If the number of messages in the set is finite then this number or any monotonic function of this number
+                        can be regarded as a measure of the information produced when one message is chosen from the set, all
+                        choices being equally likely. As was pointed out by Hartley the most natural choice is the logarithmic
+                        function. Although this definition must be generalized considerably when we consider the influence of the
+                        statistics of the message and when we have a continuous range of messages, we will in all cases use an
+                        essentially logarithmic measure.</p>
+                        <p>The logarithmic measure is more convenient for various reasons:
+                        <ol>
+                          <li>It is practically more useful. Parameters of engineering importance such as time, bandwidth, number
+                           of relays, etc., tend to vary linearly with the logarithm of the number of possibilities. For example,
+                           adding one relay to a group doubles the number of possible states of the relays. It adds 1 to the base 2
+                           logarithm of this number. Doubling the time roughly squares the number of possible messages, or
+                           doubles the logarithm, etc.</li>
+                         <li>It is nearer to our intuitive feeling as to the proper measure. This is closely related to (1) since we in-
+                           tuitively measures entities by linear comparison with common standards. One feels, for example, that
+                           two punched cards should have twice the capacity of one for information storage, and two identical
+                           channels twice the capacity of one for transmitting information.</li>
+                         <li>It is mathematically more suitable. Many of the limiting operations are simple in terms of the loga-
+                           rithm but would require clumsy restatement in terms of the number of possibilities.</li>
+                        </ol>
+                          </p>
+                          <p>
+                          The choice of a logarithmic base corresponds to the choice of a unit for measuring information. If the
+                          base 2 is used the resulting units may be called binary digits, or more briefly <i>bits</i>, a word suggested by
+                          J. W. Tukey. A device with two stable positions, such as a relay or a flip-flop circuit, can store one bit of
+                          information. <i>N</i> such devices can store <i>N</i> bits, since the total number of possible states is 2**N
+                          and log_2 2**N = N. If the base 10 is used the units may be called decimal digits. Since
+                          <center>
+                          log_2 M = log_10 M / log_10 2
+                          = 3.32 log_10 M
+                          </center>
+                          a decimal digit is about 3 1/3 bits. A digit wheel on a desk computing machine has ten stable positions and
+                          therefore has a storage capacity of one decimal digit. In analytical work where integration and differentiation
+                          are involved the base <i>e</i> is sometimes useful. The resulting units of information will be called natural units.
+                          Change from the base <i>a</i> to base <i>b</i> merely requires multiplication by log_b a.</p>
+                        <ul class="actions">
+                            <li><a href="/post/001.html" class="button icon fa-file">Continue Reading</a>
+                            </li>
+                        </ul>
+                    </article>
+
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <div id="copyright" class="container">
+        <ul class="links">
+            <li>Matthew Macumber</li>
+            <li><a href="mailto:matt.macumber@gmail.com">matt.macumber@gmail.com</a>
+            </li>
+        </ul>
+    </div>
+
+</body>
+
+</html>
