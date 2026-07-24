@@ -2,7 +2,7 @@
 <html>
 
 <head>
-  <title>Building a Private AI Server — Book</title>
+  <title>Building a Private AI Server - Book</title>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
@@ -25,25 +25,23 @@
     <hr>
     <h1 id="table-of-contents">Table of Contents </h1>
     <ul>
-      <li><a href="#building-a-private-ai-server">Building a Private AI Server</a></li>
-      <li><a href="#table-of-contents">Table of Contents</a></li>
-      <li><a href="#chapter-1-why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server?</a></li>
-      <li><a href="#chapter-2-design-goals">Chapter 2 - Design Goals</a></li>
-      <li><a href="#chapter-3-choosing-the-hardware">Chapter 3 - Choosing the Hardware</a></li>
-      <li><a href="#chapter-4-a-bit-about-unified-memory">Chapter 4 - A Bit About Unified Memory</a></li>
-      <li><a href="#chapter-5-storage">Chapter 5 - Storage</a></li>
-      <li><a href="#chapter-6-bios-settings">Chapter 6 - BIOS Settings</a></li>
-      <li><a href="#chapter-7-operating-system">Chapter 7 - Operating System</a></li>
-      <li><a href="#chapter-8-the-kernel">Chapter 8 - The Kernel</a></li>
-      <li><a href="#chapter-9-rocm-and-hipcc">Chapter 9 - ROCm and hipcc</a></li>
-      <li><a href="#chapter-10-gpu-monitoring-with-prometheus">Chapter 10 - GPU Monitoring with Prometheus</a></li>
-      <li><a href="#chapter-11-ds4-the-inference-engine">Chapter 11 - DS4: The Inference Engine</a></li>
-      <li><a href="#chapter-12-ds4-performance-work-in-progress">Chapter 12 - DS4 Performance - Work-in-Progress</a>
+      <li><a href="#chapter-1---why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server?</a></li>
+      <li><a href="#chapter-2---design-goals">Chapter 2 - Design Goals</a></li>
+      <li><a href="#chapter-3---choosing-the-hardware">Chapter 3 - Choosing the Hardware</a></li>
+      <li><a href="#chapter-4---a-bit-about-unified-memory">Chapter 4 - A Bit About Unified Memory</a></li>
+      <li><a href="#chapter-5---storage">Chapter 5 - Storage</a></li>
+      <li><a href="#chapter-6---bios-settings">Chapter 6 - BIOS Settings</a></li>
+      <li><a href="#chapter-7---operating-system">Chapter 7 - Operating System</a></li>
+      <li><a href="#chapter-8---the-kernel">Chapter 8 - The Kernel</a></li>
+      <li><a href="#chapter-9---rocm-and-hipcc">Chapter 9 - ROCm and hipcc</a></li>
+      <li><a href="#chapter-10---gpu-monitoring-with-prometheus">Chapter 10 - GPU Monitoring with Prometheus</a></li>
+      <li><a href="#chapter-11---ds4-the-inference-engine">Chapter 11 - DS4: The Inference Engine</a></li>
+      <li><a href="#chapter-12---ds4-performance---work-in-progress">Chapter 12 - DS4 Performance - Work-in-Progress</a>
       </li>
-      <li><a href="#chapter-13-using-the-server">Chapter 13 - Using the Server</a></li>
-      <li><a href="#chapter-14-takeaways">Chapter 14 - Takeaways</a></li>
-      <li><a href="#chapter-15-troubleshooting">Chapter 15 - Troubleshooting</a></li>
-      <li><a href="#appendix-a">Appendix A</a></li>
+      <li><a href="#chapter-13---using-the-server">Chapter 13 - Using the Server</a></li>
+      <li><a href="#chapter-14---takeaways">Chapter 14 - Takeaways</a></li>
+      <li><a href="#chapter-15---troubleshooting">Chapter 15 - Troubleshooting</a></li>
+      <li><a href="#chapter-15---troubleshooting">Appendix A</a></li>
     </ul>
     <hr>
     <h1 id="chapter-1---why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server? </h1>
@@ -344,17 +342,17 @@ systemctl restart software
     <h2 id="candidates">Candidates </h2>
     <ul>
       <li>
-        <p><strong>Fedora</strong> — recent kernel and libs, but major upgrades and custom system libs are a pain.</p>
+        <p><strong>Fedora</strong> - recent kernel and libs, but major upgrades and custom system libs are a pain.</p>
       </li>
       <li>
-        <p><strong>Debian</strong> — stable, predictable, minimal surprises, easy to maintain for years. Package can lag
+        <p><strong>Debian</strong> - stable, predictable, minimal surprises, easy to maintain for years. Package can lag
           behind.</p>
       </li>
       <li>
-        <p><strong>Ubuntu</strong> -- Debian with extra stuff.</p>
+        <p><strong>Ubuntu</strong> - Debian with extra stuff.</p>
       </li>
       <li>
-        <p><strong>Gentoo</strong> — I already know this one. I get to pick my init, kernel. Makes it easier to pin
+        <p><strong>Gentoo</strong> - I already know this one. I get to pick my init, kernel. Makes it easier to pin
           libraries and resolve conflicts.</p>
       </li>
     </ul>
@@ -505,7 +503,7 @@ sys-process/btop
 </code></pre>
     <p><strong>Note:</strong><br>
       Build <code>amdgpu</code> as a <strong>module</strong> (<code>=m</code>). Compiling it directly into the kernel
-      causes firmware initialization to happen before firmware files are available. Building as a module resolves this —
+      causes firmware initialization to happen before firmware files are available. Building as a module resolves this - 
       the module loads after firmware files are accessible.</p>
     <h2 id="kernel-command-line-tuning">Kernel Command-Line Tuning </h2>
     <p>These parameters showed benefit in my testing. Further research is warranted.</p>
@@ -650,16 +648,16 @@ curl http://192.168.111.101:9101/metrics
     <p>The inference engine is the central design decision of the build. Why DS4?</p>
     <ul>
       <li>
-        <p><strong>llama.cpp</strong> — excellent generalist, but optimized for breadth of model support rather than
+        <p><strong>llama.cpp</strong> - excellent generalist, but optimized for breadth of model support rather than
           depth on any single architecture. On Strix Halo, llama.cpp is perfectly usable, but has no hardware specific
           optimizations.</p>
       </li>
       <li>
-        <p><strong>vLLM</strong> — designed for datacenter multi-user serving. Overkill for a single-user headless
+        <p><strong>vLLM</strong> - designed for datacenter multi-user serving. Overkill for a single-user headless
           server.</p>
       </li>
       <li>
-        <p><strong>LMStudio</strong> — great for exploring models and prompts, a bit of overhead for serving.</p>
+        <p><strong>LMStudio</strong> - great for exploring models and prompts, a bit of overhead for serving.</p>
       </li>
       <li>
         <p><strong>DS4 (DwarfStar 4)</strong> - It optimizes exclusively for DeepSeek V4's Multi-head Latent Attention,
@@ -766,18 +764,18 @@ $ <span class="token function">sudo</span> systemctl start ds4
     <p><strong>Parameter breakdown:</strong></p>
     <ul>
       <li>
-        <p><code>--ctx 131072</code> — 128K context window. With ~81 GB for the model and ~1.8 GB for KV cache at this
+        <p><code>--ctx 131072</code> - 128K context window. With ~81 GB for the model and ~1.8 GB for KV cache at this
           context size, we have 37+ GB headroom for execution graphs and OS caching.</p>
       </li>
       <li>
-        <p><code>--kv-disk-dir ~/ds4-kv</code> — Specify the KV cache directory</p>
+        <p><code>--kv-disk-dir ~/ds4-kv</code> - Specify the KV cache directory</p>
       </li>
       <li>
-        <p><code>--kv-disk-space-mb 27648</code> — ~27 GB disk cache holds ~15 unique, full-length 128K threads before
+        <p><code>--kv-disk-space-mb 27648</code> - ~27 GB disk cache holds ~15 unique, full-length 128K threads before
           eviction.</p>
       </li>
       <li>
-        <p><code>--tokens 8192</code> — Maximum output tokens per generation.</p>
+        <p><code>--tokens 8192</code> - Maximum output tokens per generation.</p>
       </li>
     </ul>
     <h2 id="kv-cache-sizing-math">KV Cache Sizing Math </h2>
@@ -884,7 +882,7 @@ $ <span class="token function">sudo</span> systemctl start ds4
         </tr>
         <tr>
           <td><strong>Peak bidirectional</strong></td>
-          <td>—</td>
+          <td>-</td>
           <td><strong>123.45</strong></td>
         </tr>
       </tbody>
@@ -933,7 +931,7 @@ overall average (128 tokens): 14.15 t/s
     <p>Generation is stable and consistent at ~14 tokens/second. While slower than flagship discrete GPUs, it's entirely
       usable for interactive coding and assistance.</p>
     <p><strong>Context scaling:</strong> Long prompts are handled well. Prompt ingestion remains fast even with very
-      large contexts. The KV cache miss penalty costs ~32–42 seconds of re-prefill — avoid by keeping max output tokens
+      large contexts. The KV cache miss penalty costs ~32–42 seconds of re-prefill - avoid by keeping max output tokens
       high enough to avoid truncation loops.</p>
     <h2 id="power-and-thermals">Power and Thermals </h2>
     <table>
@@ -1099,7 +1097,7 @@ aider <span class="token parameter variable">--model</span> openai/deepseek-v4-f
         <p>Base URL: <code>http://localhost:8000/v1</code></p>
       </li>
       <li>
-        <p>API Key: <code>thereisnokey</code> (or any string — the server doesn't enforce auth)</p>
+        <p>API Key: <code>thereisnokey</code> (or any string - the server doesn't enforce auth)</p>
       </li>
     </ul>
     <p>This gives you a full chat interface with streaming responses, conversation history management, tool calling
