@@ -1,385 +1,473 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-  <title>Building a Private AI Server - Book</title>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <link rel="stylesheet" href="book.css">
-
+<meta name="generator" content=
+"HTML Tidy for HTML5 for Linux version 5.6.0">
+<title>Building a Private AI Server - Book</title>
+<meta charset="utf-8">
+<meta name="viewport" content=
+"width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="book.css">
 </head>
-
 <body for="html-export">
-  <div class="crossnote markdown-preview  ">
-
-    <h1 id="building-a-private-ai-server">Building a Private AI Server </h1>
-    <div class="crosslink">
-      <p>There is now a CUDA version of this guide, based on the ASUS GX10: <a href="GX10.html">Building a Private AI Server — ASUS Ascent GX10</a>.</p>
-    </div>
-    <h2 id="introduction">Introduction </h2>
-    <p>This isn't another "install Ubuntu and run ollama" guide.<br>
-      The goal of this project was to build a machine that can run one of the largest openly available language models
-      completely locally, while remaining understandable, maintainable, and "reasonably" inexpensive.</p>
-    <p>The finished system is a headless Linux server built around AMD's Ryzen AI Max+ 395 (Strix Halo) with 128 GB of
-      unified memory. It runs DeepSeek V4 Flash using antirez's DS4 inference engine and exposes an OpenAI-compatible
-      API to local development tools. This guide aims to explain the how and why of each design decision.</p>
-    <p><strong>Total build cost:</strong> $3,870 before tax</p>
-    <hr>
-    <h1 id="table-of-contents">Table of Contents </h1>
-    <ul>
-      <li><a href="#chapter-1---why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server?</a></li>
-      <li><a href="#chapter-2---design-goals">Chapter 2 - Design Goals</a></li>
-      <li><a href="#chapter-3---choosing-the-hardware">Chapter 3 - Choosing the Hardware</a></li>
-      <li><a href="#chapter-4---a-bit-about-unified-memory">Chapter 4 - A Bit About Unified Memory</a></li>
-      <li><a href="#chapter-5---storage">Chapter 5 - Storage</a></li>
-      <li><a href="#chapter-6---bios-settings">Chapter 6 - BIOS Settings</a></li>
-      <li><a href="#chapter-7---operating-system">Chapter 7 - Operating System</a></li>
-      <li><a href="#chapter-8---the-kernel">Chapter 8 - The Kernel</a></li>
-      <li><a href="#chapter-9---rocm-and-hipcc">Chapter 9 - ROCm and hipcc</a></li>
-      <li><a href="#chapter-10---gpu-monitoring-with-prometheus">Chapter 10 - GPU Monitoring with Prometheus</a></li>
-      <li><a href="#chapter-11---ds4-the-inference-engine">Chapter 11 - DS4: The Inference Engine</a></li>
-      <li><a href="#chapter-12---ds4-performance---work-in-progress">Chapter 12 - DS4 Performance - Work-in-Progress</a>
-      </li>
-      <li><a href="#chapter-13---using-the-server">Chapter 13 - Using the Server</a></li>
-      <li><a href="#chapter-14---takeaways">Chapter 14 - Takeaways</a></li>
-      <li><a href="#chapter-15---troubleshooting">Chapter 15 - Troubleshooting</a></li>
-      <li><a href="#chapter-15---troubleshooting">Appendix A</a></li>
-    </ul>
-    <hr>
-    <h1 id="chapter-1---why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server? </h1>
-    <p>I've spent nearly thirty years writing software, sometimes professionally. During the past year I've gone from
-      dismissing LLMs as unreliable code generators to using them daily for research, code generation, debugging,
-      documentation, and automation. The productivity gains for me are real, but consuming these models through cloud
-      APIs has some problems for me:</p>
-    <ul>
-      <li>Usage-based pricing</li>
-      <li>Internet dependency</li>
-      <li>Vendor lock-in</li>
-      <li>Privacy concerns</li>
-      <li>Hidden prompts and changing model behavior</li>
-      <li>Quotas</li>
-    </ul>
-    <p>Local inference removes most of those problems with some obvious downsides:</p>
-    <ul>
-      <li>Fixed Capabilities</li>
-      <li>Higher upfront cost</li>
-      <li>Limited compute capacity</li>
-      <li>Responsibility for maintaining the software stack</li>
-    </ul>
-    <p>This is also a learning experience for me. I'm not really concerned with all dimensions of efficiency.</p>
-    <h2 id="glossary-of-terms">Glossary of Terms </h2>
-    <ul>
-      <li>AMD - Company that designs and sells CPUs and GPUs</li>
-      <li>ROCm - AMD's software stack for data processing built around HIP.</li>
-      <li>HIP - C++ API and kernel language for AMD GPUs.</li>
-      <li>Strix Halo - The code name for the AMD Ryzen AI Max+ chips</li>
-      <li>NVIDIA - A company that designs and sells GPUs</li>
-      <li>CUDA - NVIDIA's proprietary "GPU" API for "general-purpose" GPU computing.</li>
-      <li>Vulkan - A cross-platform "GPU" API. Like OpenGL, but newer</li>
-      <li>Metal - Like Vulkan, but Apple-only</li>
-    </ul>
-    <hr>
-    <h1 id="chapter-2---design-goals">Chapter 2 - Design Goals </h1>
-    <ul>
-      <li>Runs (at least) one large model extremely well</li>
-      <li>Runs whatever linux distro I want</li>
-      <li>Minimal overhead</li>
-      <li>Upstream software whenever practical</li>
-      <li>Reproducible</li>
-      <li>Easy upgrades</li>
-      <li>Easy recovery</li>
-      <li>No vendor-specific management software</li>
-      <li>Minimize black boxes</li>
-    </ul>
-    <p>My ideal upgrade process looks like this:</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>ssh server
+<div class="crossnote markdown-preview">
+<h1 id="building-a-private-ai-server">Building a Private AI
+Server</h1>
+<div class="crosslink">
+<p>There is now a CUDA version of this guide, based on the ASUS
+GX10: <a href="GX10.html">Building a Private AI Server — ASUS
+Ascent GX10</a>.</p>
+</div>
+<h2 id="introduction">Introduction</h2>
+<p>This isn't another "install Ubuntu and run ollama" guide.<br>
+The goal of this project was to build a machine that can run one of
+the largest openly available language models completely locally,
+while remaining understandable, maintainable, and "reasonably"
+inexpensive.</p>
+<p>The finished system is a headless Linux server built around
+AMD's Ryzen AI Max+ 395 (Strix Halo) with 128 GB of unified memory.
+It runs DeepSeek V4 Flash using antirez's DS4 inference engine and
+exposes an OpenAI-compatible API to local development tools. This
+guide aims to explain the how and why of each design decision.</p>
+<p><strong>Total build cost:</strong> $3,870 before tax</p>
+<hr>
+<h1 id="table-of-contents">Table of Contents</h1>
+<ul>
+<li><a href="#chapter-1---why-build-a-private-ai-server">Chapter 1
+- Why Build a Private AI Server?</a></li>
+<li><a href="#chapter-2---design-goals">Chapter 2 - Design
+Goals</a></li>
+<li><a href="#chapter-3---choosing-the-hardware">Chapter 3 -
+Choosing the Hardware</a></li>
+<li><a href="#chapter-4---a-bit-about-unified-memory">Chapter 4 - A
+Bit About Unified Memory</a></li>
+<li><a href="#chapter-5---storage">Chapter 5 - Storage</a></li>
+<li><a href="#chapter-6---bios-settings">Chapter 6 - BIOS
+Settings</a></li>
+<li><a href="#chapter-7---operating-system">Chapter 7 - Operating
+System</a></li>
+<li><a href="#chapter-8---the-kernel">Chapter 8 - The
+Kernel</a></li>
+<li><a href="#chapter-9---rocm-and-hipcc">Chapter 9 - ROCm and
+hipcc</a></li>
+<li><a href="#chapter-10---gpu-monitoring-with-prometheus">Chapter
+10 - GPU Monitoring with Prometheus</a></li>
+<li><a href="#chapter-11---ds4-the-inference-engine">Chapter 11 -
+DS4: The Inference Engine</a></li>
+<li><a href=
+"#chapter-12---ds4-performance---work-in-progress">Chapter 12 - DS4
+Performance - Work-in-Progress</a></li>
+<li><a href="#chapter-13---using-the-server">Chapter 13 - Using the
+Server</a></li>
+<li><a href="#chapter-14---takeaways">Chapter 14 -
+Takeaways</a></li>
+<li><a href="#chapter-15---troubleshooting">Chapter 15 -
+Troubleshooting</a></li>
+<li><a href="#chapter-15---troubleshooting">Appendix A</a></li>
+</ul>
+<hr>
+<h1 id="chapter-1---why-build-a-private-ai-server">Chapter 1 - Why
+Build a Private AI Server?</h1>
+<p>I've spent nearly thirty years writing software, sometimes
+professionally. During the past year I've gone from dismissing LLMs
+as unreliable code generators to using them daily for research,
+code generation, debugging, documentation, and automation. The
+productivity gains for me are real, but consuming these models
+through cloud APIs has some problems for me:</p>
+<ul>
+<li>Usage-based pricing</li>
+<li>Internet dependency</li>
+<li>Vendor lock-in</li>
+<li>Privacy concerns</li>
+<li>Hidden prompts and changing model behavior</li>
+<li>Quotas</li>
+</ul>
+<p>Local inference removes most of those problems with some obvious
+downsides:</p>
+<ul>
+<li>Fixed Capabilities</li>
+<li>Higher upfront cost</li>
+<li>Limited compute capacity</li>
+<li>Responsibility for maintaining the software stack</li>
+</ul>
+<p>This is also a learning experience for me. I'm not really
+concerned with all dimensions of efficiency.</p>
+<h2 id="glossary-of-terms">Glossary of Terms</h2>
+<ul>
+<li>AMD - Company that designs and sells CPUs and GPUs</li>
+<li>ROCm - AMD's software stack for data processing built around
+HIP.</li>
+<li>HIP - C++ API and kernel language for AMD GPUs.</li>
+<li>Strix Halo - The code name for the AMD Ryzen AI Max+ chips</li>
+<li>NVIDIA - A company that designs and sells GPUs</li>
+<li>CUDA - NVIDIA's proprietary "GPU" API for "general-purpose" GPU
+computing.</li>
+<li>Vulkan - A cross-platform "GPU" API. Like OpenGL, but
+newer</li>
+<li>Metal - Like Vulkan, but Apple-only</li>
+</ul>
+<hr>
+<h1 id="chapter-2---design-goals">Chapter 2 - Design Goals</h1>
+<ul>
+<li>Runs (at least) one large model extremely well</li>
+<li>Runs whatever linux distro I want</li>
+<li>Minimal overhead</li>
+<li>Upstream software whenever practical</li>
+<li>Reproducible</li>
+<li>Easy upgrades</li>
+<li>Easy recovery</li>
+<li>No vendor-specific management software</li>
+<li>Minimize black boxes</li>
+</ul>
+<p>My ideal upgrade process looks like this:</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>ssh server
 cd software
 git pull
 make
 systemctl restart software
 </code></pre>
-    <p>Here's what I'm not considering: safety, security, local privacy.</p>
-    <p>The end product will be open to anyone on your lan, documents and responses will be sent without encryption.</p>
-    <p>This is only "how to get it working" guide. There are a lot of other concerns that should cater to your
-      particular needs and environment.</p>
-    <hr>
-    <h1 id="chapter-3---choosing-the-hardware">Chapter 3 - Choosing the Hardware </h1>
-    <h2 id="candidates-considered">Candidates Considered </h2>
-    <table>
-      <thead>
-        <tr>
-          <th>System</th>
-          <th>CPU Arch</th>
-          <th>Memory Type</th>
-          <th>GPU Stack</th>
-          <th>Key Pros</th>
-          <th>Key Cons</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Framework Desktop</td>
-          <td>x86-64 (AMD Strix Halo)</td>
-          <td>LPDDR5 (128 GB)</td>
-          <td>ROCm</td>
-          <td>Open ecosystem, x86-64, available</td>
-          <td>DIY</td>
-        </tr>
-        <tr>
-          <td>Mac Studio</td>
-          <td>M3 or M4 ARM</td>
-          <td>(128 GB)</td>
-          <td>Metal</td>
-          <td>Excellent bandwidth</td>
-          <td>Nearly impossible to find with 128 GB RAM</td>
-        </tr>
-        <tr>
-          <td>Nvidia DGX Spark</td>
-          <td>ARM</td>
-          <td>LPDDR5 (128 GB)</td>
-          <td>CUDA</td>
-          <td>Mature AI stack</td>
-          <td>ARM-only, proprietary, more expensive</td>
-        </tr>
-      </tbody>
-    </table>
-    <p>The AMD Ryzen AI Halo (basically the same thing as the Framework) was not shipping when I made my purchase.</p>
-    <p>After looking at cost and availability, I chose the Framework.</p>
-    <p><strong>Picture of the winner</strong><br>
-      <img src="server.jpg" alt="image"><br>
-      Really not much to look at.
-    </p>
-    <h2 id="why-the-framework-desktop">Why the Framework Desktop </h2>
-    <ul>
-      <li>
-        <p><strong>x86-64</strong> - it can run almost any software and has long-term maintainability. Plus, I can
-          easily repurpose it, if this whole experiment fails.</p>
-      </li>
-      <li>
-        <p><strong>ROCm</strong> - AMD's "AI" stack is "open". The software libraries and tools are available, and
-          future support looks good.</p>
-      </li>
-      <li>
-        <p><strong>128 GB unified LPDDR5</strong> - This is the magic part. This much high-bandwidth ram makes it well
-          suited for LLMs. It fits 20B models (~90 GB) with 32GB+ leftover for KV cache, disk cache, and OS overhead.
-        </p>
-      </li>
-      <li>
-        <p><strong>Excellent memory bandwidth</strong> - 123 GB/s bidirectional peak</p>
-      </li>
-      <li>
-        <p><strong>Power usage</strong> - 100 Watts under load</p>
-      </li>
-    </ul>
-    <p>I chose the Framework Desktop because it offered the best combination of unified memory capacity, x86
-      compatibility, an open software stack, and long-term flexibility.</p>
-    <h2 id="why-128-gb-matters">Why 128 GB Matters </h2>
-    <p>Running local models is a game of memory ceilings:</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Model Size</th>
-          <th>Example</th>
-          <th>Fits in 128 GB?</th>
-          <th>Fits in 32 GB?</th>
-          <th>Fits in 16 GB?</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>7B (Q4)</td>
-          <td>Llama 3 8B</td>
-          <td>✓</td>
-          <td>✓</td>
-          <td>✓</td>
-        </tr>
-        <tr>
-          <td>14B (Q4)</td>
-          <td>Qwen 2.5 14B</td>
-          <td>✓</td>
-          <td>✓</td>
-          <td>?</td>
-        </tr>
-        <tr>
-          <td>32B (Q8)</td>
-          <td>Qwen 3 32B</td>
-          <td>✓</td>
-          <td>✗</td>
-          <td>✗</td>
-        </tr>
-        <tr>
-          <td>70B (Q4)</td>
-          <td>Llama 2 70B</td>
-          <td>✓</td>
-          <td>✗</td>
-          <td>✗</td>
-        </tr>
-        <tr>
-          <td>90+ GB MoE (2/8 bit)</td>
-          <td>DeepSeek V4 Flash</td>
-          <td>Yes</td>
-          <td>✗</td>
-          <td>✗</td>
-        </tr>
-      </tbody>
-    </table>
-    <p>128 GB is the threshold where full-size frontier-class models become feasible on a single consumer-priced
-      machine. Below that, you're limited to distilled or heavily quantized models.</p>
-    <p>If I find myself limited by 128GB, I have the option to buy another one and run a high-speed link between the two
-      (e.g. Thunderbolt 4). This dream will likely only come true when RAM prices are reasonable again.</p>
-    <h2 id="better-alternatives-than-following-this-guide">Better alternatives than following this guide </h2>
-    <ul>
-      <li>
-        <p>If you only run 7B models: Use a discrete GPU.</p>
-      </li>
-      <li>
-        <p>If you need many concurrent users: multiple GPUs is simpler.</p>
-      </li>
-      <li>
-        <p>If you just want a chat bot: find a small model that runs on hardware you already have.</p>
-      </li>
-    </ul>
-    <hr>
-    <h1 id="chapter-4---a-bit-about-unified-memory">Chapter 4 - A Bit About Unified Memory </h1>
-    <p>This is the architectural feature that makes the entire project possible. Consider how data is copied in a
-      traditional discrete GPU setup.</p>
-    <h2 id="traditional-discrete-gpu-setup">Traditional Discrete GPU Setup </h2>
-    <p>The memory on the GPU is fast, but limited to 24GB. For a modest sized model, every inference step requires
-      copying data over the PCIe bus. The model weights, KV cache, and intermediate activations all compete the same
-      VRAM. Maintaining the same level of performance with larger models requires multiple GPUs.</p>
-    <p><img src="discrete.jpg" alt="image"></p>
-    <h2 id="unified-memory">Unified Memory </h2>
-    <p>In a unified memory architecture, the CPU and GPU share the same physical memory controller. The GPU can allocate
-      memory directly from the system pool using HSA (Heterogeneous System Architecture). This means:</p>
-    <p><img src="unified.jpg" alt="image"></p>
-    <ul>
-      <li>A 90 GB model fits without splitting or streaming</li>
-      <li>KV cache lives alongside model weights without contention</li>
-      <li>No PCIe transfer overhead for attention heads</li>
-      <li>Programming model simplifies to a single address space</li>
-    </ul>
-    <p>The tradeoff is bandwidth. Discrete GPUs use ultra-wide GDDR buses. A RTX 4090 cand do 1,000+ GB/s
-      (unidirectional). Strix Halo peaks at 123 GB/s bidirectional. For prompt processing (parallel and
-      bandwidth-limited), discrete GPUs win. For large context generation (sequential and latency-sensitive), the
-      unified memory advantage of zero-copy access closes the gap considerably.</p>
-    <hr>
-    <h1 id="chapter-5---storage">Chapter 5 - Storage </h1>
-    <h2 id="understanding-the-workload---why-random-iops-matter">Understanding the workload - Why Random IOPS Matter
-    </h2>
-    <p>Flash storage is usually graded by sequential write speed. A fast NVMe drive can hit 7500 MB/s. Modern
-      high-context LLM engines can treat disk as a dynamic cache tier, continuously reading and writing KV history
-      states during long sessions. For the software I'm interested in, the KV persistence layer is limited by
-      <strong>random IO</strong>. Sequential throughput is nice when loading models, but the runtime limitation is
-      random read/writes. This makes the value of an on-drive DRAM cache substantial.<br>
-      Budget NVMe drives (WD Blue SN580, Samsung 990 EVO Plus) rely on Host Memory Buffer (HMB) or skip cache pools
-      entirely. Under sustained multi-threaded writes, their SLC caches exhaust and performance collapses.</p>
-    <h2 id="drives-i-considered">Drives I Considered </h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Drive</th>
-          <th>Cache</th>
-          <th>Random Read (IOPS)</th>
-          <th>Random Write (IOPS)</th>
-          <th>Sustained Load Behavior</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td><strong>WD Blue SN580</strong></td>
-          <td>HMB</td>
-          <td>600K</td>
-          <td>750K</td>
-          <td>SLC cache exhaustion; write throttling</td>
-        </tr>
-        <tr>
-          <td><strong>Samsung 990 EVO Plus</strong></td>
-          <td>HMB</td>
-          <td>900K</td>
-          <td>950K</td>
-          <td>IOPS collapse under asynchronous queue depth</td>
-        </tr>
-        <tr>
-          <td><strong>WD Black SN850X</strong></td>
-          <td>DDR4</td>
-          <td>1,000K</td>
-          <td>1,100K</td>
-          <td>Stable, sustained multi-threaded performance</td>
-        </tr>
-        <tr>
-          <td><strong>Samsung 990 Pro 2TB</strong></td>
-          <td>LPDDR4</td>
-          <td>1,400K</td>
-          <td>1,550K</td>
-          <td>Maximum sustained throughput; deterministic IOPS</td>
-        </tr>
-      </tbody>
-    </table>
-    <h2 id="the-pick">The Pick </h2>
-    <p><strong>Samsung 990 Pro 2TB.</strong> It carries a dedicated LPDDR4 DRAM cache and delivers up to 1,400,000 read
-      / 1,550,000 write random IOPS. This keeps token processing fluid even during large context operations.</p>
-    <hr>
-    <h1 id="chapter-6---bios-settings">Chapter 6 - BIOS Settings </h1>
-    <p>The Framework comes out of the box, almost ready to go. Before we install the OS, we need to fix some things in
-      the BIOS. Press <strong>F2</strong> and change the following</p>
-    <h2 id="disable-secure-boot">Disable Secure Boot </h2>
-    <p>This will prevent any "unofficial" OS from booting. Disable that so we can install what we want.</p>
-    <h2 id="uma-framebuffer-size">UMA Framebuffer Size </h2>
-    <p>This might seem counter-intuitive, but you want to minimize the amount of memory dedicated to the GPU in the
-      BIOS. ROCm allocates unified memory dynamically through HSA. All memory allocations go through the kernel.<br>
-      <strong>Recommended setting:</strong> 512 MB (minimum).
-    </p>
-    <h2 id="other-setting-you-might-be-interested-in">Other setting you might be interested in </h2>
-    <ul>
-      <li>Fast Boot - Skips some checks on boot</li>
-      <li>Serial Console - Really out of band access</li>
-      <li>Power Resume Settings - What to do when the power comes back on, WoL, etc.</li>
-    </ul>
-    <hr>
-    <h1 id="chapter-7---operating-system">Chapter 7 - Operating System </h1>
-    <h2 id="philosophy">Philosophy </h2>
-    <p>A great OS doesn't do things you don't want. The choice depends on how much control you need and how much
-      maintenance you're willing to accept. I know linux and it has pretty low overhead. Based on previous life
-      experience I considered the following options.</p>
-    <h2 id="candidates">Candidates </h2>
-    <ul>
-      <li>
-        <p><strong>Fedora</strong> - recent kernel and libs, but major upgrades and custom system libs are a pain.</p>
-      </li>
-      <li>
-        <p><strong>Debian</strong> - stable, predictable, minimal surprises, easy to maintain for years. Package can lag
-          behind.</p>
-      </li>
-      <li>
-        <p><strong>Ubuntu</strong> - Debian with extra stuff.</p>
-      </li>
-      <li>
-        <p><strong>Gentoo</strong> - I already know this one. I get to pick my init, kernel. Makes it easier to pin
-          libraries and resolve conflicts.</p>
-      </li>
-    </ul>
-    <h2 id="the-pick-1">The Pick </h2>
-    <p>I chose Gentoo to annoy people, and I can make it work exactly how I want. Debian, Fedora or most other distros
-      would work with minor adjustments. I'm only going to go in to detail for the aspects of the OS install that may
-      have an impact.</p>
-    <h2 id="partitioning">Partitioning </h2>
-    <p>Space for efi, 8GB of swap, and the rest for everything else. All the disk usage will go to models and cache.<br>
-      Lets go with:</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>/dev/nvme0n1p1   1G EFI System
+<p>Here's what I'm not considering: safety, security, local
+privacy.</p>
+<p>The end product will be open to anyone on your lan, documents
+and responses will be sent without encryption.</p>
+<p>This is only "how to get it working" guide. There are a lot of
+other concerns that should cater to your particular needs and
+environment.</p>
+<hr>
+<h1 id="chapter-3---choosing-the-hardware">Chapter 3 - Choosing the
+Hardware</h1>
+<h2 id="candidates-considered">Candidates Considered</h2>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>CPU Arch</th>
+<th>Memory Type</th>
+<th>GPU Stack</th>
+<th>Key Pros</th>
+<th>Key Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Framework Desktop</td>
+<td>x86-64 (AMD Strix Halo)</td>
+<td>LPDDR5 (128 GB)</td>
+<td>ROCm</td>
+<td>Open ecosystem, x86-64, available</td>
+<td>DIY</td>
+</tr>
+<tr>
+<td>Mac Studio</td>
+<td>M3 or M4 ARM</td>
+<td>(128 GB)</td>
+<td>Metal</td>
+<td>Excellent bandwidth</td>
+<td>Nearly impossible to find with 128 GB RAM</td>
+</tr>
+<tr>
+<td>Nvidia DGX Spark</td>
+<td>ARM</td>
+<td>LPDDR5 (128 GB)</td>
+<td>CUDA</td>
+<td>Mature AI stack</td>
+<td>ARM-only, proprietary, more expensive</td>
+</tr>
+</tbody>
+</table>
+<p>The AMD Ryzen AI Halo (basically the same thing as the
+Framework) was not shipping when I made my purchase.</p>
+<p>After looking at cost and availability, I chose the
+Framework.</p>
+<p><strong>Picture of the winner</strong><br>
+<img src="server.jpg" alt="image"><br>
+Really not much to look at.</p>
+<h2 id="why-the-framework-desktop">Why the Framework Desktop</h2>
+<ul>
+<li>
+<p><strong>x86-64</strong> - it can run almost any software and has
+long-term maintainability. Plus, I can easily repurpose it, if this
+whole experiment fails.</p>
+</li>
+<li>
+<p><strong>ROCm</strong> - AMD's "AI" stack is "open". The software
+libraries and tools are available, and future support looks
+good.</p>
+</li>
+<li>
+<p><strong>128 GB unified LPDDR5</strong> - This is the magic part.
+This much high-bandwidth ram makes it well suited for LLMs. It fits
+20B models (~90 GB) with 32GB+ leftover for KV cache, disk cache,
+and OS overhead.</p>
+</li>
+<li>
+<p><strong>Excellent memory bandwidth</strong> - 123 GB/s
+bidirectional peak</p>
+</li>
+<li>
+<p><strong>Power usage</strong> - 100 Watts under load</p>
+</li>
+</ul>
+<p>I chose the Framework Desktop because it offered the best
+combination of unified memory capacity, x86 compatibility, an open
+software stack, and long-term flexibility.</p>
+<h2 id="why-128-gb-matters">Why 128 GB Matters</h2>
+<p>Running local models is a game of memory ceilings:</p>
+<table>
+<thead>
+<tr>
+<th>Model Size</th>
+<th>Example</th>
+<th>Fits in 128 GB?</th>
+<th>Fits in 32 GB?</th>
+<th>Fits in 16 GB?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7B (Q4)</td>
+<td>Llama 3 8B</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>14B (Q4)</td>
+<td>Qwen 2.5 14B</td>
+<td>✓</td>
+<td>✓</td>
+<td>?</td>
+</tr>
+<tr>
+<td>32B (Q8)</td>
+<td>Qwen 3 32B</td>
+<td>✓</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+<tr>
+<td>70B (Q4)</td>
+<td>Llama 2 70B</td>
+<td>✓</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+<tr>
+<td>90+ GB MoE (2/8 bit)</td>
+<td>DeepSeek V4 Flash</td>
+<td>Yes</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+</tbody>
+</table>
+<p>128 GB is the threshold where full-size frontier-class models
+become feasible on a single consumer-priced machine. Below that,
+you're limited to distilled or heavily quantized models.</p>
+<p>If I find myself limited by 128GB, I have the option to buy
+another one and run a high-speed link between the two (e.g.
+Thunderbolt 4). This dream will likely only come true when RAM
+prices are reasonable again.</p>
+<h2 id="better-alternatives-than-following-this-guide">Better
+alternatives than following this guide</h2>
+<ul>
+<li>
+<p>If you only run 7B models: Use a discrete GPU.</p>
+</li>
+<li>
+<p>If you need many concurrent users: multiple GPUs is simpler.</p>
+</li>
+<li>
+<p>If you just want a chat bot: find a small model that runs on
+hardware you already have.</p>
+</li>
+</ul>
+<hr>
+<h1 id="chapter-4---a-bit-about-unified-memory">Chapter 4 - A Bit
+About Unified Memory</h1>
+<p>This is the architectural feature that makes the entire project
+possible. Consider how data is copied in a traditional discrete GPU
+setup.</p>
+<h2 id="traditional-discrete-gpu-setup">Traditional Discrete GPU
+Setup</h2>
+<p>The memory on the GPU is fast, but limited to 24GB. For a modest
+sized model, every inference step requires copying data over the
+PCIe bus. The model weights, KV cache, and intermediate activations
+all compete the same VRAM. Maintaining the same level of
+performance with larger models requires multiple GPUs.</p>
+<p><img src="discrete.jpg" alt="image"></p>
+<h2 id="unified-memory">Unified Memory</h2>
+<p>In a unified memory architecture, the CPU and GPU share the same
+physical memory controller. The GPU can allocate memory directly
+from the system pool using HSA (Heterogeneous System Architecture).
+This means:</p>
+<p><img src="unified.jpg" alt="image"></p>
+<ul>
+<li>A 90 GB model fits without splitting or streaming</li>
+<li>KV cache lives alongside model weights without contention</li>
+<li>No PCIe transfer overhead for attention heads</li>
+<li>Programming model simplifies to a single address space</li>
+</ul>
+<p>The tradeoff is bandwidth. Discrete GPUs use ultra-wide GDDR
+buses. A RTX 4090 cand do 1,000+ GB/s (unidirectional). Strix Halo
+peaks at 123 GB/s bidirectional. For prompt processing (parallel
+and bandwidth-limited), discrete GPUs win. For large context
+generation (sequential and latency-sensitive), the unified memory
+advantage of zero-copy access closes the gap considerably.</p>
+<hr>
+<h1 id="chapter-5---storage">Chapter 5 - Storage</h1>
+<h2 id="understanding-the-workload---why-random-iops-matter">
+Understanding the workload - Why Random IOPS Matter</h2>
+<p>Flash storage is usually graded by sequential write speed. A
+fast NVMe drive can hit 7500 MB/s. Modern high-context LLM engines
+can treat disk as a dynamic cache tier, continuously reading and
+writing KV history states during long sessions. For the software
+I'm interested in, the KV persistence layer is limited by
+<strong>random IO</strong>. Sequential throughput is nice when
+loading models, but the runtime limitation is random read/writes.
+This makes the value of an on-drive DRAM cache substantial.<br>
+Budget NVMe drives (WD Blue SN580, Samsung 990 EVO Plus) rely on
+Host Memory Buffer (HMB) or skip cache pools entirely. Under
+sustained multi-threaded writes, their SLC caches exhaust and
+performance collapses.</p>
+<h2 id="drives-i-considered">Drives I Considered</h2>
+<table>
+<thead>
+<tr>
+<th>Drive</th>
+<th>Cache</th>
+<th>Random Read (IOPS)</th>
+<th>Random Write (IOPS)</th>
+<th>Sustained Load Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>WD Blue SN580</strong></td>
+<td>HMB</td>
+<td>600K</td>
+<td>750K</td>
+<td>SLC cache exhaustion; write throttling</td>
+</tr>
+<tr>
+<td><strong>Samsung 990 EVO Plus</strong></td>
+<td>HMB</td>
+<td>900K</td>
+<td>950K</td>
+<td>IOPS collapse under asynchronous queue depth</td>
+</tr>
+<tr>
+<td><strong>WD Black SN850X</strong></td>
+<td>DDR4</td>
+<td>1,000K</td>
+<td>1,100K</td>
+<td>Stable, sustained multi-threaded performance</td>
+</tr>
+<tr>
+<td><strong>Samsung 990 Pro 2TB</strong></td>
+<td>LPDDR4</td>
+<td>1,400K</td>
+<td>1,550K</td>
+<td>Maximum sustained throughput; deterministic IOPS</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-pick">The Pick</h2>
+<p><strong>Samsung 990 Pro 2TB.</strong> It carries a dedicated
+LPDDR4 DRAM cache and delivers up to 1,400,000 read / 1,550,000
+write random IOPS. This keeps token processing fluid even during
+large context operations.</p>
+<hr>
+<h1 id="chapter-6---bios-settings">Chapter 6 - BIOS Settings</h1>
+<p>The Framework comes out of the box, almost ready to go. Before
+we install the OS, we need to fix some things in the BIOS. Press
+<strong>F2</strong> and change the following</p>
+<h2 id="disable-secure-boot">Disable Secure Boot</h2>
+<p>This will prevent any "unofficial" OS from booting. Disable that
+so we can install what we want.</p>
+<h2 id="uma-framebuffer-size">UMA Framebuffer Size</h2>
+<p>This might seem counter-intuitive, but you want to minimize the
+amount of memory dedicated to the GPU in the BIOS. ROCm allocates
+unified memory dynamically through HSA. All memory allocations go
+through the kernel.<br>
+<strong>Recommended setting:</strong> 512 MB (minimum).</p>
+<h2 id="other-setting-you-might-be-interested-in">Other setting you
+might be interested in</h2>
+<ul>
+<li>Fast Boot - Skips some checks on boot</li>
+<li>Serial Console - Really out of band access</li>
+<li>Power Resume Settings - What to do when the power comes back
+on, WoL, etc.</li>
+</ul>
+<hr>
+<h1 id="chapter-7---operating-system">Chapter 7 - Operating
+System</h1>
+<h2 id="philosophy">Philosophy</h2>
+<p>A great OS doesn't do things you don't want. The choice depends
+on how much control you need and how much maintenance you're
+willing to accept. I know linux and it has pretty low overhead.
+Based on previous life experience I considered the following
+options.</p>
+<h2 id="candidates">Candidates</h2>
+<ul>
+<li>
+<p><strong>Fedora</strong> - recent kernel and libs, but major
+upgrades and custom system libs are a pain.</p>
+</li>
+<li>
+<p><strong>Debian</strong> - stable, predictable, minimal
+surprises, easy to maintain for years. Package can lag behind.</p>
+</li>
+<li>
+<p><strong>Ubuntu</strong> - Debian with extra stuff.</p>
+</li>
+<li>
+<p><strong>Gentoo</strong> - I already know this one. I get to pick
+my init, kernel. Makes it easier to pin libraries and resolve
+conflicts.</p>
+</li>
+</ul>
+<h2 id="the-pick-1">The Pick</h2>
+<p>I chose Gentoo to annoy people, and I can make it work exactly
+how I want. Debian, Fedora or most other distros would work with
+minor adjustments. I'm only going to go in to detail for the
+aspects of the OS install that may have an impact.</p>
+<h2 id="partitioning">Partitioning</h2>
+<p>Space for efi, 8GB of swap, and the rest for everything else.
+All the disk usage will go to models and cache.<br>
+Lets go with:</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>/dev/nvme0n1p1   1G EFI System
 /dev/nvme0n1p2   8G Linux swap
 /dev/nvme0n1p3 1.8T Linux filesystem
 </code></pre>
-    <h2 id="filesystem-why-xfs">Filesystem: Why XFS </h2>
-    <p>When all 16 cores are processing inference or concurrent agent scripts, filesystem metadata contention can become
-      a real bottleneck. Under heavy parallel metadata workloads, XFS generally scales better than ext4. I love ZFS, but
-      it is RAM-hungry. I want that RAM to go to inference, not ARC.<br>
-      XFS partitions are collected into independent allocation groups (AGs), allowing parallel read/write queues to
-      write metadata concurrently without waiting for a master lock.</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>mkfs.xfs <span class="token parameter variable">-s</span> <span class="token assign-left variable">size</span><span class="token operator">=</span><span class="token number">4096</span> <span class="token parameter variable">-b</span> <span class="token assign-left variable">size</span><span class="token operator">=</span><span class="token number">4096</span> <span class="token parameter variable">-c</span> <span class="token assign-left variable">options</span><span class="token operator">=</span>/usr/share/xfsprogs/mkfs/lts_6.18.conf /dev/nvme0n1p3
+<h2 id="filesystem-why-xfs">Filesystem: Why XFS</h2>
+<p>When all 16 cores are processing inference or concurrent agent
+scripts, filesystem metadata contention can become a real
+bottleneck. Under heavy parallel metadata workloads, XFS generally
+scales better than ext4. I love ZFS, but it is RAM-hungry. I want
+that RAM to go to inference, not ARC.<br>
+XFS partitions are collected into independent allocation groups
+(AGs), allowing parallel read/write queues to write metadata
+concurrently without waiting for a master lock.</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>mkfs.xfs <span class=
+"token parameter variable">-s</span> <span class=
+"token assign-left variable">size</span><span class=
+"token operator">=</span><span class=
+"token number">4096</span> <span class=
+"token parameter variable">-b</span> <span class=
+"token assign-left variable">size</span><span class=
+"token operator">=</span><span class=
+"token number">4096</span> <span class=
+"token parameter variable">-c</span> <span class=
+"token assign-left variable">options</span><span class=
+"token operator">=</span>/usr/share/xfsprogs/mkfs/lts_6.18.conf /dev/nvme0n1p3
 </code></pre>
-    <p>The config file contains the following:</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>[metadata]
+<p>The config file contains the following:</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>[metadata]
 bigtime=1
 crc=1
 finobt=1
@@ -396,13 +484,17 @@ exchange=1
 [naming]
 parent=1
 </code></pre>
-    <h2 id="base-os---gentoo-specific">Base OS - (Gentoo specific) </h2>
-    <p>I have the choice of "init" and 32-bit compatibility. I know systemd, and it does everything I need, so I'll go
-      with that. I don't see myself needing to run 32-bit code on this machine, so I'll skip the multi-lib
-      compatibility.</p>
-    <h2 id="makeconf---gentoo-specific">Make.conf - (Gentoo specific) </h2>
-    <p>This defines how things should be build, and with what optional functionality.</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>COMMON_FLAGS="-march=native -O2 -pipe"
+<h2 id="base-os---gentoo-specific">Base OS - (Gentoo specific)</h2>
+<p>I have the choice of "init" and 32-bit compatibility. I know
+systemd, and it does everything I need, so I'll go with that. I
+don't see myself needing to run 32-bit code on this machine, so
+I'll skip the multi-lib compatibility.</p>
+<h2 id="makeconf---gentoo-specific">Make.conf - (Gentoo
+specific)</h2>
+<p>This defines how things should be build, and with what optional
+functionality.</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>COMMON_FLAGS="-march=native -O2 -pipe"
 CFLAGS="${COMMON_FLAGS}"
 CXXFLAGS="${COMMON_FLAGS}"
 FCFLAGS="${COMMON_FLAGS}"
@@ -419,35 +511,43 @@ LC_MESSAGES=C.UTF-8
 PYTHON_SINGLE_TARGET="python3_13"
 PYTHON_TARGETS="python3_13"
 </code></pre>
-    <p>For the Gentoo system profile, I'm running <code>amd64 23.0 no-multilib systemd (stable)</code></p>
-    <p>Specifying the CPU Flags to use: /etc/portage/package.use/cpu-flags</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>*/* CPU_FLAGS_X86: aes avx avx2 avx512_bf16 avx512_bitalg avx512_vbmi2 avx512_vnni avx512_vp2intersect avx512_vpopcntdq avx512bw avx512cd avx512dq avx512f avx512ifma avx512vbmi avx512vl avx_vnni bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3 vpclmulqdq
+<p>For the Gentoo system profile, I'm running <code>amd64 23.0
+no-multilib systemd (stable)</code></p>
+<p>Specifying the CPU Flags to use:
+/etc/portage/package.use/cpu-flags</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>*/* CPU_FLAGS_X86: aes avx avx2 avx512_bf16 avx512_bitalg avx512_vbmi2 avx512_vnni avx512_vp2intersect avx512_vpopcntdq avx512bw avx512cd avx512dq avx512f avx512ifma avx512vbmi avx512vl avx_vnni bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3 vpclmulqdq
 </code></pre>
-    <p>Specifying GPUs to support<br>
-      /etc/portage/package.use/gpu</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>*/* VIDEO_CARDS: -* amdgpu radeonsi
+<p>Specifying GPUs to support<br>
+/etc/portage/package.use/gpu</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>*/* VIDEO_CARDS: -* amdgpu radeonsi
 </code></pre>
-    <p>Dependency versioning<br>
-      /etc/portage/package.use/hip</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>&gt;=media-libs/libglvnd-1.7.0 X
+<p>Dependency versioning<br>
+/etc/portage/package.use/hip</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>&gt;=media-libs/libglvnd-1.7.0 X
 </code></pre>
-    <p>This left me with 89 packages to download and build. Downloading took <code>89 seconds</code>. Build took
-      <code>16m46s</code>.</p>
-    <p>Accept some licences ** /etc/portage/package.license **</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code># Accepting the license for linux-firmware
+<p>This left me with 89 packages to download and build. Downloading
+took <code>89 seconds</code>. Build took <code>16m46s</code>.</p>
+<p>Accept some licences ** /etc/portage/package.license **</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code># Accepting the license for linux-firmware
 sys-kernel/linux-firmware linux-fw-redistributable
 
 # Accepting any license that permits redistribution
 sys-kernel/linux-firmware @BINARY-REDISTRIBUTABLE
 </code></pre>
-    <p>Dracut builds init for our custom kernel<br>
-      <strong>/etc/portage/package.use/kernel</strong>
-    </p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>sys-kernel/installkernel dracut
+<p>Dracut builds init for our custom kernel<br>
+<strong>/etc/portage/package.use/kernel</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>sys-kernel/installkernel dracut
 </code></pre>
-    <h2 id="other-tools-for-the-install">Other tools for the install </h2>
-    <p><strong>Basic system tools:</strong> - 7m39</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>app-text/vim
+<h2 id="other-tools-for-the-install">Other tools for the
+install</h2>
+<p><strong>Basic system tools:</strong> - 7m39</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>app-text/vim
 bash-completion
 app-admin/sudo
 app-editors/vim
@@ -465,92 +565,156 @@ sys-kernel/gentoo-sources
 sys-kernel/linux-firmware
 sys-process/time
 </code></pre>
-    <p><strong>Nice to have</strong> - 4m50</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>app-misc/screen
+<p><strong>Nice to have</strong> - 4m50</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>app-misc/screen
 app-shells/bash-completion
 app-text/tree
 sys-apps/moreutils
 sys-apps/the_silver_searcher
 sys-process/btop
 </code></pre>
-    <p>Rebuilding considering new flags and dependencies took <code>29m15</code></p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>emerge -UND @world
+<p>Rebuilding considering new flags and dependencies took
+<code>29m15</code></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>emerge -UND @world
 </code></pre>
-    <hr>
-    <h1 id="chapter-8---the-kernel">Chapter 8 - The Kernel </h1>
-    <h2 id="source-and-firmware-files">Source and Firmware Files </h2>
-    <p>AMD frequently releases firmware updates that improve GPU stability, power management, and hardware enablement.
-      Install <code>linux-firmware</code> and kernel sources:</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">-a</span> sys-kernel/linux-firmware sys-kernel/gentoo-sources
+<hr>
+<h1 id="chapter-8---the-kernel">Chapter 8 - The Kernel</h1>
+<h2 id="source-and-firmware-files">Source and Firmware Files</h2>
+<p>AMD frequently releases firmware updates that improve GPU
+stability, power management, and hardware enablement. Install
+<code>linux-firmware</code> and kernel sources:</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>emerge <span class=
+"token parameter variable">-a</span> sys-kernel/linux-firmware sys-kernel/gentoo-sources
 </code></pre>
-    <h2 id="custom-kernel-build">Custom Kernel Build </h2>
-    <p>Build the kernel:</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token builtin class-name">cd</span> /usr/src/linux
+<h2 id="custom-kernel-build">Custom Kernel Build</h2>
+<p>Build the kernel:</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token builtin class-name">cd</span> /usr/src/linux
 <span class="token function">make</span> clean
 </code></pre>
-    <p>Add the following to the config</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token comment"># Kernel config targets:</span>
-<span class="token assign-left variable">CONFIG_DRM_AMDGPU</span><span class="token operator">=</span>m    <span class="token comment"># build amdgpu as a module</span>
-<span class="token assign-left variable">CONFIG_HSA_AMD</span><span class="token operator">=</span>y       <span class="token comment"># enable HSA for ROCm</span>
-<span class="token assign-left variable">CONFIG_HSA_AMD_SVM</span><span class="token operator">=</span>y   <span class="token comment"># shared virtual memory</span>
-<span class="token assign-left variable">CONFIG_IOMMU_SUPPORT</span><span class="token operator">=</span>y
-<span class="token assign-left variable">CONFIG_HUGETLBFS</span><span class="token operator">=</span>y
+<p>Add the following to the config</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token comment"># Kernel config targets:</span>
+<span class=
+"token assign-left variable">CONFIG_DRM_AMDGPU</span><span class=
+"token operator">=</span>m    <span class=
+"token comment"># build amdgpu as a module</span>
+<span class=
+"token assign-left variable">CONFIG_HSA_AMD</span><span class=
+"token operator">=</span>y       <span class=
+"token comment"># enable HSA for ROCm</span>
+<span class=
+"token assign-left variable">CONFIG_HSA_AMD_SVM</span><span class=
+"token operator">=</span>y   <span class=
+"token comment"># shared virtual memory</span>
+<span class=
+"token assign-left variable">CONFIG_IOMMU_SUPPORT</span><span class="token operator">=</span>y
+<span class=
+"token assign-left variable">CONFIG_HUGETLBFS</span><span class=
+"token operator">=</span>y
 </code></pre>
-    <p>This will validate the config</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>make oldconfig
+<p>This will validate the config</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>make oldconfig
 </code></pre>
-    <p>Compile, takes about 3 minutes</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">make</span> <span class="token parameter variable">-j32</span>
+<p>Compile, takes about 3 minutes</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token function">make</span> <span class=
+"token parameter variable">-j32</span>
 <span class="token function">make</span> modules_install
-<span class="token function">make</span> <span class="token function">install</span>
+<span class="token function">make</span> <span class=
+"token function">install</span>
 </code></pre>
-    <p><strong>Note:</strong><br>
-      Build <code>amdgpu</code> as a <strong>module</strong> (<code>=m</code>). Compiling it directly into the kernel
-      causes firmware initialization to happen before firmware files are available. Building as a module resolves this - 
-      the module loads after firmware files are accessible.</p>
-    <h2 id="kernel-command-line-tuning">Kernel Command-Line Tuning </h2>
-    <p>These parameters showed benefit in my testing. Further research is warranted.</p>
-    <p>From <strong>/etc/default.grub</strong></p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token assign-left variable">GRUB_CMDLINE_LINUX</span><span class="token operator">=</span><span class="token string">"amdgpu.gttsize=126976 ttm.pages_limit=32505856 ttm.page_pool_size=32505856 amdgpu.vm_fragment_size=9"</span>
+<p><strong>Note:</strong><br>
+Build <code>amdgpu</code> as a <strong>module</strong>
+(<code>=m</code>). Compiling it directly into the kernel causes
+firmware initialization to happen before firmware files are
+available. Building as a module resolves this - the module loads
+after firmware files are accessible.</p>
+<h2 id="kernel-command-line-tuning">Kernel Command-Line Tuning</h2>
+<p>These parameters showed benefit in my testing. Further research
+is warranted.</p>
+<p>From <strong>/etc/default.grub</strong></p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token assign-left variable">GRUB_CMDLINE_LINUX</span><span class=
+"token operator">=</span><span class=
+"token string">"amdgpu.gttsize=126976 ttm.pages_limit=32505856 ttm.page_pool_size=32505856 amdgpu.vm_fragment_size=9"</span>
 </code></pre>
-    <p><strong>Parameter breakdown:</strong></p>
-    <ul>
-      <li>
-        <p><code>amdgpu.gttsize</code> - Set the size of the "Graphics Translation Table" 124 GB (in MB).</p>
-      </li>
-      <li>
-        <p><code>ttm.pages_limit</code> - Number of (4k) pages to allocate for the ram: 124G / 4k</p>
-      </li>
-      <li>
-        <p><code>ttm.page_pool_size</code> - Size of the "cache" in pages (same as ttm.pages_limit)</p>
-      </li>
-      <li>
-        <p><code>amdgpu.vm_fragment_size</code> - Pages are put into big "fragments". 2**N * 4KB == 2MB (huge pages)</p>
-      </li>
-    </ul>
-    <p>This leaves ~4 GB for the OS and DS4.</p>
-    <h2 id="update-the-bootloader">Update the bootloader </h2>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>dracut <span class="token parameter variable">--force</span> <span class="token parameter variable">--kver</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span><span class="token function">make</span> kernelrelease<span class="token variable">)</span></span>"</span>
-<span class="token function">grub-mkconfig</span> <span class="token parameter variable">-o</span> /boot/grub/grub.cfg
-grub-install --efi-directory<span class="token operator">=</span>/efi
+<p><strong>Parameter breakdown:</strong></p>
+<ul>
+<li>
+<p><code>amdgpu.gttsize</code> - Set the size of the "Graphics
+Translation Table" 124 GB (in MB).</p>
+</li>
+<li>
+<p><code>ttm.pages_limit</code> - Number of (4k) pages to allocate
+for the ram: 124G / 4k</p>
+</li>
+<li>
+<p><code>ttm.page_pool_size</code> - Size of the "cache" in pages
+(same as ttm.pages_limit)</p>
+</li>
+<li>
+<p><code>amdgpu.vm_fragment_size</code> - Pages are put into big
+"fragments". 2**N * 4KB == 2MB (huge pages)</p>
+</li>
+</ul>
+<p>This leaves ~4 GB for the OS and DS4.</p>
+<h2 id="update-the-bootloader">Update the bootloader</h2>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>dracut <span class=
+"token parameter variable">--force</span> <span class=
+"token parameter variable">--kver</span> <span class=
+"token string">"<span class="token variable"><span class=
+"token variable">$(</span><span class=
+"token function">make</span> kernelrelease<span class=
+"token variable">)</span></span>"</span>
+<span class="token function">grub-mkconfig</span> <span class=
+"token parameter variable">-o</span> /boot/grub/grub.cfg
+grub-install --efi-directory<span class=
+"token operator">=</span>/efi
 </code></pre>
-    <p><strong>REBOOT</strong></p>
-    <h2 id="verification">Verification </h2>
-    <p>Lets verify the kernel and userspace tools are happy with the GPU:</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token comment"># Check IOMMU and GPU</span>
-$ <span class="token function">dmesg</span> <span class="token operator">|</span> <span class="token function">grep</span> <span class="token parameter variable">-E</span> <span class="token string">"IOMMU|GPU"</span>
-<span class="token punctuation">[</span>    <span class="token number">0.448835</span><span class="token punctuation">]</span> pci 0000:00:00.2: AMD-Vi: IOMMU performance counters supported
-<span class="token punctuation">[</span>    <span class="token number">0.460690</span><span class="token punctuation">]</span> perf/amd_iommu: Detected AMD IOMMU <span class="token comment">#0 (2 banks, 4 counters/bank).</span>
-<span class="token punctuation">[</span>    <span class="token number">5.989264</span><span class="token punctuation">]</span> amdgpu: Virtual CRAT table created <span class="token keyword keyword-for">for</span> GPU
-<span class="token punctuation">[</span>    <span class="token number">5.990104</span><span class="token punctuation">]</span> amdgpu: Topology: Add dGPU <span class="token function">node</span> <span class="token punctuation">[</span>0x1586:0x1002<span class="token punctuation">]</span>
+<p><strong>REBOOT</strong></p>
+<h2 id="verification">Verification</h2>
+<p>Lets verify the kernel and userspace tools are happy with the
+GPU:</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token comment"># Check IOMMU and GPU</span>
+$ <span class="token function">dmesg</span> <span class=
+"token operator">|</span> <span class=
+"token function">grep</span> <span class=
+"token parameter variable">-E</span> <span class=
+"token string">"IOMMU|GPU"</span>
+<span class="token punctuation">[</span>    <span class=
+"token number">0.448835</span><span class=
+"token punctuation">]</span> pci 0000:00:00.2: AMD-Vi: IOMMU performance counters supported
+<span class="token punctuation">[</span>    <span class=
+"token number">0.460690</span><span class=
+"token punctuation">]</span> perf/amd_iommu: Detected AMD IOMMU <span class="token comment">#0 (2 banks, 4 counters/bank).</span>
+<span class="token punctuation">[</span>    <span class=
+"token number">5.989264</span><span class=
+"token punctuation">]</span> amdgpu: Virtual CRAT table created <span class="token keyword keyword-for">for</span> GPU
+<span class="token punctuation">[</span>    <span class=
+"token number">5.990104</span><span class=
+"token punctuation">]</span> amdgpu: Topology: Add dGPU <span class="token function">node</span> <span class="token punctuation">[</span>0x1586:0x1002<span class="token punctuation">]</span>
 
 </code></pre>
-    <hr>
-    <h1 id="chapter-9---rocm-and-hipcc">Chapter 9 - ROCm and hipcc </h1>
-    <p>These are the libs and tools for the GPU.</p>
-    <p>For gentoo, most of the dev packages are masked, this explicitly allows their install.</p>
-    <p><strong>/etc/portage/package.accept_keywords/rocm</strong></p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>dev-build/rocm-cmake ~amd64
+<hr>
+<h1 id="chapter-9---rocm-and-hipcc">Chapter 9 - ROCm and hipcc</h1>
+<p>These are the libs and tools for the GPU.</p>
+<p>For gentoo, most of the dev packages are masked, this explicitly
+allows their install.</p>
+<p><strong>/etc/portage/package.accept_keywords/rocm</strong></p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>dev-build/rocm-cmake ~amd64
 dev-libs/rocm-comgr ~amd64
 dev-libs/rocm-core ~amd64
 dev-libs/rocm-device-libs ~amd64
@@ -560,8 +724,9 @@ dev-util/rocm-smi ~amd64
 dev-util/rocm_bandwidth_test ~amd64
 dev-util/rocminfo ~amd64
 </code></pre>
-    <p><strong>/etc/portage/package.accept_keywords/hipcc</strong></p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>dev-util/Tensile ~amd64
+<p><strong>/etc/portage/package.accept_keywords/hipcc</strong></p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>dev-util/Tensile ~amd64
 dev-util/hip ~amd64
 dev-util/hipcc ~amd64
 
@@ -573,59 +738,93 @@ sci-libs/rocBLAS ~amd64
 sci-libs/rocPRIM ~amd64
 sci-libs/rocWMMA ~amd64
 </code></pre>
-    <p>Once all that installs, check that the utilities see the hardware and run a perf test, for fun.</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token comment"># Check ROCm sees the GPU</span>
-$ rocminfo <span class="token operator">|</span> <span class="token function">grep</span> <span class="token string">"^  Name:"</span>
-  Name:                    AMD RYZEN AI MAX+ <span class="token number">395</span> w/ Radeon 8060S
+<p>Once all that installs, check that the utilities see the
+hardware and run a perf test, for fun.</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token comment"># Check ROCm sees the GPU</span>
+$ rocminfo <span class="token operator">|</span> <span class=
+"token function">grep</span> <span class=
+"token string">"^  Name:"</span>
+  Name:                    AMD RYZEN AI MAX+ <span class=
+"token number">395</span> w/ Radeon 8060S
   Name:                    gfx1151
 
 <span class="token comment"># Run bandwidth test</span>
 rocm_bandwidth_test run tb p2p
-<span class="token comment"># Expected: 100+ GB/s bidirectional</span>
+<span class=
+"token comment"># Expected: 100+ GB/s bidirectional</span>
 <span class="token punctuation">..</span>.
-Bidirectional copy peak bandwidth GB/s <span class="token punctuation">[</span>Local <span class="token builtin class-name">read</span> / Remote write<span class="token punctuation">]</span> <span class="token punctuation">(</span>GPU-Executor: GFX<span class="token punctuation">)</span>
-     SRC<span class="token punctuation">\</span>DST    CPU 00       GPU 00
-  CPU 00  -<span class="token operator">&gt;</span>       N/A        <span class="token number">40.71</span>
-  CPU 00 <span class="token operator">&lt;</span>-        N/A        <span class="token number">84.00</span>
-  CPU 00 <span class="token operator">&lt;</span>-<span class="token operator">&gt;</span>       N/A       <span class="token number">124.71</span>
+Bidirectional copy peak bandwidth GB/s <span class=
+"token punctuation">[</span>Local <span class=
+"token builtin class-name">read</span> / Remote write<span class=
+"token punctuation">]</span> <span class=
+"token punctuation">(</span>GPU-Executor: GFX<span class=
+"token punctuation">)</span>
+     SRC<span class=
+"token punctuation">\</span>DST    CPU 00       GPU 00
+  CPU 00  -<span class=
+"token operator">&gt;</span>       N/A        <span class=
+"token number">40.71</span>
+  CPU 00 <span class=
+"token operator">&lt;</span>-        N/A        <span class=
+"token number">84.00</span>
+  CPU 00 <span class="token operator">&lt;</span>-<span class=
+"token operator">&gt;</span>       N/A       <span class=
+"token number">124.71</span>
 <span class="token punctuation">..</span>.
 </code></pre>
-    <h1 id="chapter-10---gpu-monitoring-with-prometheus">Chapter 10 - GPU Monitoring with Prometheus </h1>
-    <p>This might seem premature, but instrumenting our system at this point will allow us to get a baseline, and have
-      us verify our system in a couple of new dimensions.</p>
-    <p>I vibecoded a lightweight exporter in Go (a nice test) that reads directly from <code>/sys/</code> and
-      <code>/proc</code>. This produces a single static binary, and is systemd-friendly.</p>
-    <p><a href="./amd_gpu_exporter.go">amd_gpu_exporter.go</a></p>
-    <p>Build with:</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>$ <span class="token builtin class-name">cd</span> ~/amd_gpu_exporter
+<h1 id="chapter-10---gpu-monitoring-with-prometheus">Chapter 10 -
+GPU Monitoring with Prometheus</h1>
+<p>This might seem premature, but instrumenting our system at this
+point will allow us to get a baseline, and have us verify our
+system in a couple of new dimensions.</p>
+<p>I vibecoded a lightweight exporter in Go (a nice test) that
+reads directly from <code>/sys/</code> and <code>/proc</code>. This
+produces a single static binary, and is systemd-friendly.</p>
+<p><a href="./amd_gpu_exporter.go">amd_gpu_exporter.go</a></p>
+<p>Build with:</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>$ <span class=
+"token builtin class-name">cd</span> ~/amd_gpu_exporter
 $ go mod init amd_gpu_exporter
 go: creating new go.mod: module amd_gpu_exporter
-go: to <span class="token function">add</span> module requirements and sums:
+go: to <span class=
+"token function">add</span> module requirements and sums:
         go mod tidy
 $ go mod tidy
-go: finding module <span class="token keyword keyword-for">for</span> package github.com/prometheus/client_golang/prometheus/promhttp
-go: finding module <span class="token keyword keyword-for">for</span> package github.com/prometheus/client_golang/prometheus
+go: finding module <span class=
+"token keyword keyword-for">for</span> package github.com/prometheus/client_golang/prometheus/promhttp
+go: finding module <span class=
+"token keyword keyword-for">for</span> package github.com/prometheus/client_golang/prometheus
 <span class="token punctuation">..</span>.
 $ go build amd_gpu_exporter.go
 </code></pre>
-    <p><strong>Published Metrics:</strong></p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>amd_gpu_busy_percent
+<p><strong>Published Metrics:</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>amd_gpu_busy_percent
 amd_gpu_power_watts
 amd_gpu_temp_celsius
 amd_gpu_vram_total_bytes
 amd_gpu_vram_used_bytes
 amd_system_memory_pressure_ratio
 </code></pre>
-    <p>A simple systemd script, and that's this side of monitoring taken care of.</p>
-    <p>This enables and starts the node_exporter for basic system metrics</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>$ emerge <span class="token parameter variable">-a</span> app-metrics/node_exporter
-$ <span class="token function">sudo</span> systemctl <span class="token builtin class-name">enable</span> node_exporter
-$ <span class="token function">sudo</span> systemctl start node_exporter
+<p>A simple systemd script, and that's this side of monitoring
+taken care of.</p>
+<p>This enables and starts the node_exporter for basic system
+metrics</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>$ emerge <span class=
+"token parameter variable">-a</span> app-metrics/node_exporter
+$ <span class="token function">sudo</span> systemctl <span class=
+"token builtin class-name">enable</span> node_exporter
+$ <span class=
+"token function">sudo</span> systemctl start node_exporter
 </code></pre>
-    <p>This defines, enables and starts our gpu exporter:<br>
-      <strong>/etc/systemd/system/amd_gpu_exporter.service</strong>
-    </p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>[Unit]
+<p>This defines, enables and starts our gpu exporter:<br>
+<strong>/etc/systemd/system/amd_gpu_exporter.service</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>[Unit]
 Description=AMD GPU Exporter for Prom
 After=network-online.target
 
@@ -636,77 +835,111 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 </code></pre>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>$ systemctl daemon-reload
-$ <span class="token function">sudo</span> systemctl <span class="token builtin class-name">enable</span> amd_gpu_exporter.service
-$ <span class="token function">sudo</span> systemctl start amd_gpu_exporter.service
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>$ systemctl daemon-reload
+$ <span class="token function">sudo</span> systemctl <span class=
+"token builtin class-name">enable</span> amd_gpu_exporter.service
+$ <span class=
+"token function">sudo</span> systemctl start amd_gpu_exporter.service
 </code></pre>
-    <p><strong>Checking that it works</strong><br>
-      This should return a long list of key value pairs.</p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>curl http://192.168.111.101:9100/metrics
+<p><strong>Checking that it works</strong><br>
+This should return a long list of key value pairs.</p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>curl http://192.168.111.101:9100/metrics
 curl http://192.168.111.101:9101/metrics
 </code></pre>
-    <hr>
-    <h1 id="chapter-11---ds4-the-inference-engine">Chapter 11 - DS4: The Inference Engine </h1>
-    <h2 id="why-ds4">Why DS4? </h2>
-    <p>The inference engine is the central design decision of the build. Why DS4?</p>
-    <ul>
-      <li>
-        <p><strong>llama.cpp</strong> - excellent generalist, but optimized for breadth of model support rather than
-          depth on any single architecture. On Strix Halo, llama.cpp is perfectly usable, but has no hardware specific
-          optimizations.</p>
-      </li>
-      <li>
-        <p><strong>vLLM</strong> - designed for datacenter multi-user serving. Overkill for a single-user headless
-          server.</p>
-      </li>
-      <li>
-        <p><strong>LMStudio</strong> - great for exploring models and prompts, a bit of overhead for serving.</p>
-      </li>
-      <li>
-        <p><strong>DS4 (DwarfStar 4)</strong> - It optimizes exclusively for DeepSeek V4's Multi-head Latent Attention,
-          compressed KV cache, and MoE routing on 128GB+ machines.</p>
-      </li>
-    </ul>
-    <p>The interesting parts that set it apart from llama.cpp: focus on a single model architecture and dedicated
-      enhancements like SSD-backed KV state handling.</p>
-    <h2 id="the-model">The Model </h2>
-    <p>DeepSeek V4 Flash uses asymmetric quantization - dense attention, router, and shared expert layers are held at
-      8-bit precision (Q8_0), while the Mixture-of-Experts routing blocks are compressed to 2-bit. This drops the active
-      memory footprint to ~81 GB. It fits in our 128 GB pool with gigabytes of headroom for KV cache, disk cache, and OS
-      overhead.<br>
-      The model and server support a 128K token context window and an OpenAI-compatible API for any client to consume.
-      DS4 is intentionally optimized for a single active session, which matches my workload.</p>
-    <h2 id="build-for-strix-halo">Build for Strix Halo </h2>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">git</span> clone https://github.com/antirez/ds4.git
+<hr>
+<h1 id="chapter-11---ds4-the-inference-engine">Chapter 11 - DS4:
+The Inference Engine</h1>
+<h2 id="why-ds4">Why DS4?</h2>
+<p>The inference engine is the central design decision of the
+build. Why DS4?</p>
+<ul>
+<li>
+<p><strong>llama.cpp</strong> - excellent generalist, but optimized
+for breadth of model support rather than depth on any single
+architecture. On Strix Halo, llama.cpp is perfectly usable, but has
+no hardware specific optimizations.</p>
+</li>
+<li>
+<p><strong>vLLM</strong> - designed for datacenter multi-user
+serving. Overkill for a single-user headless server.</p>
+</li>
+<li>
+<p><strong>LMStudio</strong> - great for exploring models and
+prompts, a bit of overhead for serving.</p>
+</li>
+<li>
+<p><strong>DS4 (DwarfStar 4)</strong> - It optimizes exclusively
+for DeepSeek V4's Multi-head Latent Attention, compressed KV cache,
+and MoE routing on 128GB+ machines.</p>
+</li>
+</ul>
+<p>The interesting parts that set it apart from llama.cpp: focus on
+a single model architecture and dedicated enhancements like
+SSD-backed KV state handling.</p>
+<h2 id="the-model">The Model</h2>
+<p>DeepSeek V4 Flash uses asymmetric quantization - dense
+attention, router, and shared expert layers are held at 8-bit
+precision (Q8_0), while the Mixture-of-Experts routing blocks are
+compressed to 2-bit. This drops the active memory footprint to ~81
+GB. It fits in our 128 GB pool with gigabytes of headroom for KV
+cache, disk cache, and OS overhead.<br>
+The model and server support a 128K token context window and an
+OpenAI-compatible API for any client to consume. DS4 is
+intentionally optimized for a single active session, which matches
+my workload.</p>
+<h2 id="build-for-strix-halo">Build for Strix Halo</h2>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token function">git</span> clone https://github.com/antirez/ds4.git
 <span class="token builtin class-name">cd</span> ds4
-<span class="token function">make</span> rocm <span class="token comment"># 36s</span>
+<span class="token function">make</span> rocm <span class=
+"token comment"># 36s</span>
 </code></pre>
-    <h2 id="download-the-models">Download the model(s) </h2>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token comment"># This is the "standard" 2-bit routed experts, about 81 GB on disk.</span>
+<h2 id="download-the-models">Download the model(s)</h2>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token comment"># This is the "standard" 2-bit routed experts, about 81 GB on disk.</span>
 ./download_model.sh q2-imatrix
-<span class="token comment"># Optional - The larger model - Mixed Flash quant: mostly q2 routed experts, with the last 6 layers using q4 routed experts. About 98 GB on disk.</span>
+<span class=
+"token comment"># Optional - The larger model - Mixed Flash quant: mostly q2 routed experts, with the last 6 layers using q4 routed experts. About 98 GB on disk.</span>
 ./download_model.sh q2-q4-imatrix
-<span class="token comment"># Optional - Optional speculative decoding component, about 3.5 GB on disk.  It is useful with q2-imatrix, q2-q4-imatrix, and q4-imatrix</span>
+<span class=
+"token comment"># Optional - Optional speculative decoding component, about 3.5 GB on disk.  It is useful with q2-imatrix, q2-q4-imatrix, and q4-imatrix</span>
 ./download_model.sh mtp
 </code></pre>
-    <p><strong>Verification:</strong></p>
-    <p>These are optional steps to validate functionality.</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>$ ./ds4-agent <span class="token parameter variable">-p</span> <span class="token string">"Are you alive?"</span>
-ds4: Linux rocm backend <span class="token builtin class-name">set</span> <span class="token assign-left variable">oom_score_adj</span><span class="token operator">=</span><span class="token number">1000</span>
+<p><strong>Verification:</strong></p>
+<p>These are optional steps to validate functionality.</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>$ ./ds4-agent <span class=
+"token parameter variable">-p</span> <span class=
+"token string">"Are you alive?"</span>
+ds4: Linux rocm backend <span class=
+"token builtin class-name">set</span> <span class=
+"token assign-left variable">oom_score_adj</span><span class=
+"token operator">=</span><span class="token number">1000</span>
 ds4: ROCm backend initialized on AMD Radeon 8060S Graphics <span class="token punctuation">(</span>sm_115<span class="token punctuation">)</span>
-ds4: ROCm preparing model tensor mappings: <span class="token number">80.24</span> GiB
-ds4: ROCm startup model preparation covered <span class="token number">80.76</span> GiB of tensor spans <span class="token keyword keyword-in">in</span> <span class="token number">19</span>.429s
-ds4: rocm backend initialized <span class="token keyword keyword-for">for</span> graph diagnostics
+ds4: ROCm preparing model tensor mappings: <span class=
+"token number">80.24</span> GiB
+ds4: ROCm startup model preparation covered <span class=
+"token number">80.76</span> GiB of tensor spans <span class=
+"token keyword keyword-in">in</span> <span class=
+"token number">19</span>.429s
+ds4: rocm backend initialized <span class=
+"token keyword keyword-for">for</span> graph diagnostics
 DwarfStar 🐋 Agent, context 100k tokens
 
-✦ Updating system prompt cache<span class="token punctuation">..</span>.
+✦ Updating system prompt cache<span class=
+"token punctuation">..</span>.
 Yes, I am alive and ready to help. Let me know what you need.
 
 Yes, I'm here and ready to help. What would you like me to work on?
 </code></pre>
-    <p>Lets turn this into a service:</p>
-    <p><strong>/etc/systemd/system/ds4.service</strong></p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>[Unit]
+<p>Lets turn this into a service:</p>
+<p><strong>/etc/systemd/system/ds4.service</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>[Unit]
 Description=DS4 LLM Service
 After=network-online.target
 
@@ -717,539 +950,751 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 </code></pre>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>$ <span class="token function">sudo</span> systemctl daemon-reload
-$ <span class="token function">sudo</span> systemctl <span class="token builtin class-name">enable</span> ds4
-Created symlink <span class="token string">'/etc/systemd/system/multi-user.target.wants/ds4.service'</span> → <span class="token string">'/etc/systemd/system/ds4.service'</span><span class="token builtin class-name">.</span>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>$ <span class=
+"token function">sudo</span> systemctl daemon-reload
+$ <span class="token function">sudo</span> systemctl <span class=
+"token builtin class-name">enable</span> ds4
+Created symlink <span class=
+"token string">'/etc/systemd/system/multi-user.target.wants/ds4.service'</span> → <span class="token string">'/etc/systemd/system/ds4.service'</span><span class="token builtin class-name">.</span>
 $ <span class="token function">sudo</span> systemctl start ds4
 </code></pre>
-    <hr>
-    <h1 id="chapter-12---ds4-performance---work-in-progress">Chapter 12 - DS4 Performance - Work-in-Progress </h1>
-    <h2 id="methodology">Methodology </h2>
-    <p>All benchmarks run on the following unless otherwise noted.</p>
-    <ul>
-      <li>
-        <p><strong>Machine:</strong> Framework Desktop, AMD Ryzen AI Max+ 395 (Strix Halo)</p>
-      </li>
-      <li>
-        <p><strong>Memory:</strong> 128 GB unified LPDDR5X</p>
-      </li>
-      <li>
-        <p><strong>Kernel:</strong> Linux neo 6.18.35-gentoo-r1 #3 SMP PREEMPT_DYNAMIC</p>
-      </li>
-      <li>
-        <p><strong>ROCM-SMI version:</strong> 4.0.0+unknown</p>
-      </li>
-      <li>
-        <p><strong>ROCM-SMI-LIB version:</strong> 7.8.0</p>
-      </li>
-      <li>
-        <p><strong>Model:</strong> DeepSeek V4 Flash (asymmetric Q8_0 / Q2_0)</p>
-      </li>
-      <li>
-        <p><strong>Prompt length:</strong> 9,370 tokens for prefill benchmark</p>
-      </li>
-      <li>
-        <p><strong>Generation length:</strong> 128 tokens for decode benchmark</p>
-      </li>
-      <li>
-        <p><strong>Temperature:</strong> 0 (deterministic for benchmarking)</p>
-      </li>
-    </ul>
-    <h2 id="ds4-launch-configuration">DS4 Launch Configuration </h2>
-    <p>I normally run DS4 with the following flags</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>./ds4-server <span class="token punctuation">\</span>
-    <span class="token parameter variable">--rocm</span> <span class="token punctuation">\</span>
-    <span class="token parameter variable">--ctx</span> <span class="token number">131072</span> <span class="token punctuation">\</span>
+<hr>
+<h1 id="chapter-12---ds4-performance---work-in-progress">Chapter 12
+- DS4 Performance - Work-in-Progress</h1>
+<h2 id="methodology">Methodology</h2>
+<p>All benchmarks run on the following unless otherwise noted.</p>
+<ul>
+<li>
+<p><strong>Machine:</strong> Framework Desktop, AMD Ryzen AI Max+
+395 (Strix Halo)</p>
+</li>
+<li>
+<p><strong>Memory:</strong> 128 GB unified LPDDR5X</p>
+</li>
+<li>
+<p><strong>Kernel:</strong> Linux neo 6.18.35-gentoo-r1 #3 SMP
+PREEMPT_DYNAMIC</p>
+</li>
+<li>
+<p><strong>ROCM-SMI version:</strong> 4.0.0+unknown</p>
+</li>
+<li>
+<p><strong>ROCM-SMI-LIB version:</strong> 7.8.0</p>
+</li>
+<li>
+<p><strong>Model:</strong> DeepSeek V4 Flash (asymmetric Q8_0 /
+Q2_0)</p>
+</li>
+<li>
+<p><strong>Prompt length:</strong> 9,370 tokens for prefill
+benchmark</p>
+</li>
+<li>
+<p><strong>Generation length:</strong> 128 tokens for decode
+benchmark</p>
+</li>
+<li>
+<p><strong>Temperature:</strong> 0 (deterministic for
+benchmarking)</p>
+</li>
+</ul>
+<h2 id="ds4-launch-configuration">DS4 Launch Configuration</h2>
+<p>I normally run DS4 with the following flags</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>./ds4-server <span class=
+"token punctuation">\</span>
+    <span class=
+"token parameter variable">--rocm</span> <span class=
+"token punctuation">\</span>
+    <span class=
+"token parameter variable">--ctx</span> <span class="token number">131072</span> <span class="token punctuation">\</span>
     --kv-disk-dir ~/ds4-kv <span class="token punctuation">\</span>
-    --kv-disk-space-mb 27648 <span class="token punctuation">\</span>
-    <span class="token parameter variable">--tokens</span> <span class="token number">8192</span>
+    --kv-disk-space-mb 27648 <span class=
+"token punctuation">\</span>
+    <span class=
+"token parameter variable">--tokens</span> <span class=
+"token number">8192</span>
 </code></pre>
-    <p><strong>Parameter breakdown:</strong></p>
-    <ul>
-      <li>
-        <p><code>--ctx 131072</code> - 128K context window. With ~81 GB for the model and ~1.8 GB for KV cache at this
-          context size, we have 37+ GB headroom for execution graphs and OS caching.</p>
-      </li>
-      <li>
-        <p><code>--kv-disk-dir ~/ds4-kv</code> - Specify the KV cache directory</p>
-      </li>
-      <li>
-        <p><code>--kv-disk-space-mb 27648</code> - ~27 GB disk cache holds ~15 unique, full-length 128K threads before
-          eviction.</p>
-      </li>
-      <li>
-        <p><code>--tokens 8192</code> - Maximum output tokens per generation.</p>
-      </li>
-    </ul>
-    <h2 id="kv-cache-sizing-math">KV Cache Sizing Math </h2>
-    <p>DeepSeek V4's MLA (Multi-head Latent Attention) compresses KV cache to ~14.5 KiB per token:</p>
-    <ul>
-      <li>
-        <p>128K context = ~1.8 GB in-memory</p>
-      </li>
-      <li>
-        <p>On disk, serialized cache is ~13.5 KiB per token = ~1.8 GB per 128K thread</p>
-      </li>
-      <li>
-        <p>With <code>--kv-disk-space-mb 27648</code>, you get ~15 warm threads before eviction</p>
-      </li>
-    </ul>
-    <p><strong>Calculating</strong> <code>--ctx</code> <strong>(The In-Memory Limit):</strong></p>
-    <ol>
-      <li>
-        <p>Profile baseline: Launch with <code>--ctx 8192</code> and check log:
-          <code>ds4: context buffers 188.00 MiB (ctx=8192, ...)</code></p>
-      </li>
-      <li>
-        <p>Per-token cost: 188 MiB / 8192 tokens ≈ 0.023 MiB per token (~23.5 KiB)</p>
-      </li>
-      <li>
-        <p>Headroom: With 39 GB free after model loading, max context ceiling = 39 GB / 0.023 MiB/token ≈ ~1.6 million
-          tokens (theoretical)</p>
-      </li>
-      <li>
-        <p>Safety margin: Leave 15% buffer. Practical limit is 128K–256K before accuracy drifts.</p>
-      </li>
-    </ol>
-    <p><strong>Calculating</strong> <code>--kv-disk-space-mb</code> <strong>(The Eviction Horizon):</strong></p>
-    <ul>
-      <li>
-        <p>5 unique threads ~9 GB</p>
-      </li>
-      <li>
-        <p>15 unique threads ~27 GB</p>
-      </li>
-      <li>
-        <p>30 unique threads ~54 GB</p>
-      </li>
-    </ul>
-    <h2 id="ssd-streaming-mode">SSD Streaming Mode </h2>
-    <p>For running the PRO variant or when memory is tight:</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>./ds4-server --ssd-streaming
+<p><strong>Parameter breakdown:</strong></p>
+<ul>
+<li>
+<p><code>--ctx 131072</code> - 128K context window. With ~81 GB for
+the model and ~1.8 GB for KV cache at this context size, we have
+37+ GB headroom for execution graphs and OS caching.</p>
+</li>
+<li>
+<p><code>--kv-disk-dir ~/ds4-kv</code> - Specify the KV cache
+directory</p>
+</li>
+<li>
+<p><code>--kv-disk-space-mb 27648</code> - ~27 GB disk cache holds
+~15 unique, full-length 128K threads before eviction.</p>
+</li>
+<li>
+<p><code>--tokens 8192</code> - Maximum output tokens per
+generation.</p>
+</li>
+</ul>
+<h2 id="kv-cache-sizing-math">KV Cache Sizing Math</h2>
+<p>DeepSeek V4's MLA (Multi-head Latent Attention) compresses KV
+cache to ~14.5 KiB per token:</p>
+<ul>
+<li>
+<p>128K context = ~1.8 GB in-memory</p>
+</li>
+<li>
+<p>On disk, serialized cache is ~13.5 KiB per token = ~1.8 GB per
+128K thread</p>
+</li>
+<li>
+<p>With <code>--kv-disk-space-mb 27648</code>, you get ~15 warm
+threads before eviction</p>
+</li>
+</ul>
+<p><strong>Calculating</strong> <code>--ctx</code> <strong>(The
+In-Memory Limit):</strong></p>
+<ol>
+<li>
+<p>Profile baseline: Launch with <code>--ctx 8192</code> and check
+log: <code>ds4: context buffers 188.00 MiB (ctx=8192,
+...)</code></p>
+</li>
+<li>
+<p>Per-token cost: 188 MiB / 8192 tokens ≈ 0.023 MiB per token
+(~23.5 KiB)</p>
+</li>
+<li>
+<p>Headroom: With 39 GB free after model loading, max context
+ceiling = 39 GB / 0.023 MiB/token ≈ ~1.6 million tokens
+(theoretical)</p>
+</li>
+<li>
+<p>Safety margin: Leave 15% buffer. Practical limit is 128K–256K
+before accuracy drifts.</p>
+</li>
+</ol>
+<p><strong>Calculating</strong> <code>--kv-disk-space-mb</code>
+<strong>(The Eviction Horizon):</strong></p>
+<ul>
+<li>
+<p>5 unique threads ~9 GB</p>
+</li>
+<li>
+<p>15 unique threads ~27 GB</p>
+</li>
+<li>
+<p>30 unique threads ~54 GB</p>
+</li>
+</ul>
+<h2 id="ssd-streaming-mode">SSD Streaming Mode</h2>
+<p>For running the PRO variant or when memory is tight:</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>./ds4-server --ssd-streaming
 </code></pre>
-    <p>The scheduler hides loading latency by fetching missing experts from disk concurrently while executing shared
-      experts already resident in RAM. If the model fits entirely in memory, keep SSD streaming disabled for maximum
-      prefill speed.</p>
-    <h2 id="speculative-decoding-mtp">Speculative Decoding (MTP) </h2>
-    <p>I haven't tested this yet.</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>./ds4-server <span class="token parameter variable">--mtp</span> ./gguf/ds4flash_draft.gguf --mtp-draft <span class="token number">2</span>
+<p>The scheduler hides loading latency by fetching missing experts
+from disk concurrently while executing shared experts already
+resident in RAM. If the model fits entirely in memory, keep SSD
+streaming disabled for maximum prefill speed.</p>
+<h2 id="speculative-decoding-mtp">Speculative Decoding (MTP)</h2>
+<p>I haven't tested this yet.</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>./ds4-server <span class=
+"token parameter variable">--mtp</span> ./gguf/ds4flash_draft.gguf --mtp-draft <span class="token number">2</span>
 </code></pre>
-    <p>This can accelerate generation by predicting multiple tokens per forward pass without modifying the base model's
-      determinism.</p>
-    <h2 id="comparing-with-other-models">Comparing with other models </h2>
-    <p>I have a handful of models already downloaded. They are not necessarily sized for this machine, or suited to the
-      particular tasks I'll be using this for, but they do provide some interesting comparison points.</p>
-    <p>** Benchmark loop **</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token keyword keyword-for">for</span> <span class="token for-or-select variable">m</span> <span class="token keyword keyword-in">in</span> ./ds4/gguf/DeepSeek-V4-Flash-*<span class="token punctuation">;</span>
+<p>This can accelerate generation by predicting multiple tokens per
+forward pass without modifying the base model's determinism.</p>
+<h2 id="comparing-with-other-models">Comparing with other
+models</h2>
+<p>I have a handful of models already downloaded. They are not
+necessarily sized for this machine, or suited to the particular
+tasks I'll be using this for, but they do provide some interesting
+comparison points.</p>
+<p>** Benchmark loop **</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token keyword keyword-for">for</span> <span class=
+"token for-or-select variable">m</span> <span class=
+"token keyword keyword-in">in</span> ./ds4/gguf/DeepSeek-V4-Flash-*<span class="token punctuation">;</span>
 <span class="token keyword keyword-do">do</span>
-        <span class="token function">time</span> ./ds4/ds4 --prefill-chunk <span class="token number">1024</span> <span class="token parameter variable">-m</span> <span class="token variable">$m</span> --prompt-file ~/enigma.txt
-<span class="token keyword keyword-done">done</span> <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span><span class="token file-descriptor important">&amp;1</span> <span class="token operator">|</span> <span class="token function">tee</span> <span class="token parameter variable">-a</span> ~/<span class="token variable">$F</span>
+        <span class=
+"token function">time</span> ./ds4/ds4 --prefill-chunk <span class=
+"token number">1024</span> <span class=
+"token parameter variable">-m</span> <span class=
+"token variable">$m</span> --prompt-file ~/enigma.txt
+<span class="token keyword keyword-done">done</span> <span class=
+"token operator"><span class=
+"token file-descriptor important">2</span>&gt;</span><span class=
+"token file-descriptor important">&amp;1</span> <span class=
+"token operator">|</span> <span class=
+"token function">tee</span> <span class=
+"token parameter variable">-a</span> ~/<span class=
+"token variable">$F</span>
 
-<span class="token keyword keyword-for">for</span> <span class="token for-or-select variable">m</span> <span class="token keyword keyword-in">in</span> ./ds4/gguf/*gguf ./models/*gguf
+<span class="token keyword keyword-for">for</span> <span class=
+"token for-or-select variable">m</span> <span class=
+"token keyword keyword-in">in</span> ./ds4/gguf/*gguf ./models/*gguf
 <span class="token keyword keyword-do">do</span>
-./llama.cpp/build/bin/llama-bench <span class="token punctuation">\</span>
-  <span class="token parameter variable">-m</span> <span class="token variable">$m</span> <span class="token punctuation">\</span>
-  <span class="token parameter variable">-ngl</span> <span class="token number">999</span> <span class="token punctuation">\</span>
-  <span class="token parameter variable">-p</span> <span class="token number">512,2048</span> <span class="token punctuation">\</span>
-  <span class="token parameter variable">-n</span> <span class="token number">128</span> <span class="token punctuation">\</span>
-  <span class="token parameter variable">-d</span> <span class="token number">0,4096</span>,8192 <span class="token punctuation">\</span>
-  <span class="token parameter variable">-fa</span> <span class="token number">0,1</span> <span class="token punctuation">\</span>
-  <span class="token parameter variable">-r</span> <span class="token number">5</span> <span class="token punctuation">\</span>
-  --main-gpu <span class="token number">0</span> <span class="token punctuation">\</span>
+./llama.cpp/build/bin/llama-bench <span class=
+"token punctuation">\</span>
+  <span class="token parameter variable">-m</span> <span class=
+"token variable">$m</span> <span class="token punctuation">\</span>
+  <span class="token parameter variable">-ngl</span> <span class=
+"token number">999</span> <span class="token punctuation">\</span>
+  <span class="token parameter variable">-p</span> <span class=
+"token number">512,2048</span> <span class=
+"token punctuation">\</span>
+  <span class="token parameter variable">-n</span> <span class=
+"token number">128</span> <span class="token punctuation">\</span>
+  <span class="token parameter variable">-d</span> <span class=
+"token number">0,4096</span>,8192 <span class=
+"token punctuation">\</span>
+  <span class="token parameter variable">-fa</span> <span class=
+"token number">0,1</span> <span class="token punctuation">\</span>
+  <span class="token parameter variable">-r</span> <span class=
+"token number">5</span> <span class="token punctuation">\</span>
+  --main-gpu <span class="token number">0</span> <span class=
+"token punctuation">\</span>
   --split-mode none <span class="token punctuation">\</span>
   <span class="token parameter variable">-o</span> csv
 </code></pre>
-    <p><strong>enigma.txt</strong> is the text contents of <a
-        href="https://en.wikipedia.org/wiki/Enigma_machine">https://en.wikipedia.org/wiki/Enigma_machine</a> followed by
-      the prompt: "Write a 1024 word explanation of the Enigma."</p>
-    <h2 id="bandwidth-benchmarks">Bandwidth Benchmarks </h2>
-    <p>On Strix Halo with the tuned kernel parameters:</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Direction</th>
-          <th>One Way (GB/s)</th>
-          <th>Bidirectional (GB/s)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>CPU → GPU</td>
-          <td>57.45</td>
-          <td>61.73</td>
-        </tr>
-        <tr>
-          <td>GPU → CPU</td>
-          <td>102.36</td>
-          <td>61.91</td>
-        </tr>
-        <tr>
-          <td><strong>Peak bidirectional</strong></td>
-          <td>-</td>
-          <td><strong>123.45</strong></td>
-        </tr>
-      </tbody>
-    </table>
-    <p>The asymmetry (CPU→GPU slower at ~57 GB/s vs GPU→CPU at ~102 GB/s) is expected: CPU writes use Write-Combining
-      memory attributes that throttle sequential stores, while the GPU uses massive parallel DMA channels to saturate
-      the 256-bit memory bus. This profile is optimized for LLM inference:</p>
-    <ul>
-      <li>
-        <p>Model loading: ~57 GB/s is fast enough (seconds).</p>
-      </li>
-      <li>
-        <p>Token generation: GPU→CPU at 102 GB/s is where decode happens - excellent for an integrated platform.</p>
-      </li>
-      <li>
-        <p>Prompt prefill: Bidirectional peak at 123 GB/s means long-context ingestion doesn't stutter.</p>
-      </li>
-    </ul>
-    <h2 id="ds4-inference-benchmarks">DS4 Inference Benchmarks </h2>
-    <p><strong>Startup:</strong> Model loads ~90.9 GiB of tensor mappings in approximately 20 seconds.<br>
-      <strong>Memory usage:</strong>
-    </p>
-    <ul>
-      <li>
-        <p>Model: ~81 GB (asymmetric 2-bit/8-bit quant)</p>
-      </li>
-      <li>
-        <p>Context buffers (128K): ~1.8 GB</p>
-      </li>
-      <li>
-        <p>Total runtime memory: ~83 GB, leaving 45+ GB headroom</p>
-      </li>
-    </ul>
-    <p><strong>Prompt processing (prefill):</strong></p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>prefill chunk (4096 tokens): 239.68 t/s
+<p><strong>enigma.txt</strong> is the text contents of <a href=
+"https://en.wikipedia.org/wiki/Enigma_machine">https://en.wikipedia.org/wiki/Enigma_machine</a>
+followed by the prompt: "Write a 1024 word explanation of the
+Enigma."</p>
+<h2 id="bandwidth-benchmarks">Bandwidth Benchmarks</h2>
+<p>On Strix Halo with the tuned kernel parameters:</p>
+<table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>One Way (GB/s)</th>
+<th>Bidirectional (GB/s)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU → GPU</td>
+<td>57.45</td>
+<td>61.73</td>
+</tr>
+<tr>
+<td>GPU → CPU</td>
+<td>102.36</td>
+<td>61.91</td>
+</tr>
+<tr>
+<td><strong>Peak bidirectional</strong></td>
+<td>-</td>
+<td><strong>123.45</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The asymmetry (CPU→GPU slower at ~57 GB/s vs GPU→CPU at ~102
+GB/s) is expected: CPU writes use Write-Combining memory attributes
+that throttle sequential stores, while the GPU uses massive
+parallel DMA channels to saturate the 256-bit memory bus. This
+profile is optimized for LLM inference:</p>
+<ul>
+<li>
+<p>Model loading: ~57 GB/s is fast enough (seconds).</p>
+</li>
+<li>
+<p>Token generation: GPU→CPU at 102 GB/s is where decode happens -
+excellent for an integrated platform.</p>
+</li>
+<li>
+<p>Prompt prefill: Bidirectional peak at 123 GB/s means
+long-context ingestion doesn't stutter.</p>
+</li>
+</ul>
+<h2 id="ds4-inference-benchmarks">DS4 Inference Benchmarks</h2>
+<p><strong>Startup:</strong> Model loads ~90.9 GiB of tensor
+mappings in approximately 20 seconds.<br>
+<strong>Memory usage:</strong></p>
+<ul>
+<li>
+<p>Model: ~81 GB (asymmetric 2-bit/8-bit quant)</p>
+</li>
+<li>
+<p>Context buffers (128K): ~1.8 GB</p>
+</li>
+<li>
+<p>Total runtime memory: ~83 GB, leaving 45+ GB headroom</p>
+</li>
+</ul>
+<p><strong>Prompt processing (prefill):</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>prefill chunk (4096 tokens): 239.68 t/s
 prefill chunk (8192 tokens): 224.47 t/s
 overall average (9370 tokens): 222.70 t/s
 </code></pre>
-    <p>Prompt ingestion is highly parallel and primarily memory-bandwidth limited.<br>
-      <strong>Token generation (decode):</strong>
-    </p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>decoding chunk (50 tokens): 14.15 t/s
+<p>Prompt ingestion is highly parallel and primarily
+memory-bandwidth limited.<br>
+<strong>Token generation (decode):</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>decoding chunk (50 tokens): 14.15 t/s
 decoding chunk (50 tokens): 14.16 t/s
 overall average (128 tokens): 14.15 t/s
 </code></pre>
-    <p>Generation is stable and consistent at ~14 tokens/second. While slower than flagship discrete GPUs, it's entirely
-      usable for interactive coding and assistance.</p>
-    <p><strong>Context scaling:</strong> Long prompts are handled well. Prompt ingestion remains fast even with very
-      large contexts. The KV cache miss penalty costs ~32–42 seconds of re-prefill - avoid by keeping max output tokens
-      high enough to avoid truncation loops.</p>
-    <h2 id="power-and-thermals">Power and Thermals </h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Load</th>
-          <th>Watts</th>
-          <th>GPU Junction Temp</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Idle (no model loaded)</td>
-          <td>4 W</td>
-          <td>36°C</td>
-        </tr>
-        <tr>
-          <td>Prefill (prompt ingestion)</td>
-          <td>105 W</td>
-          <td>67°C</td>
-        </tr>
-        <tr>
-          <td>Decode (token generation)</td>
-          <td>81 W</td>
-          <td>51°C</td>
-        </tr>
-      </tbody>
-    </table>
-    <p>I opted for the Noctua fan, and barely notice it spinning at 1800 rpm</p>
-    <h2 id="water-consumption">Water Consumption </h2>
-    <p>None. In fact, I would recommend not exposing this machine to any water.</p>
-    <h2 id="llamacpp-comparison-benchmarks">llama.cpp Comparison Benchmarks </h2>
-    <p>llama.cpp is the lowest overhead, inference engine that can run almost any model.</p>
-    <p>llama.cpp was installed directly from github</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>$ <span class="token function">git</span> clone https://github.com/ggml-org/llama.cpp.git
+<p>Generation is stable and consistent at ~14 tokens/second. While
+slower than flagship discrete GPUs, it's entirely usable for
+interactive coding and assistance.</p>
+<p><strong>Context scaling:</strong> Long prompts are handled well.
+Prompt ingestion remains fast even with very large contexts. The KV
+cache miss penalty costs ~32–42 seconds of re-prefill - avoid by
+keeping max output tokens high enough to avoid truncation
+loops.</p>
+<h2 id="power-and-thermals">Power and Thermals</h2>
+<table>
+<thead>
+<tr>
+<th>Load</th>
+<th>Watts</th>
+<th>GPU Junction Temp</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Idle (no model loaded)</td>
+<td>4 W</td>
+<td>36°C</td>
+</tr>
+<tr>
+<td>Prefill (prompt ingestion)</td>
+<td>105 W</td>
+<td>67°C</td>
+</tr>
+<tr>
+<td>Decode (token generation)</td>
+<td>81 W</td>
+<td>51°C</td>
+</tr>
+</tbody>
+</table>
+<p>I opted for the Noctua fan, and barely notice it spinning at
+1800 rpm</p>
+<h2 id="water-consumption">Water Consumption</h2>
+<p>None. In fact, I would recommend not exposing this machine to
+any water.</p>
+<h2 id="llamacpp-comparison-benchmarks">llama.cpp Comparison
+Benchmarks</h2>
+<p>llama.cpp is the lowest overhead, inference engine that can run
+almost any model.</p>
+<p>llama.cpp was installed directly from github</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>$ <span class=
+"token function">git</span> clone https://github.com/ggml-org/llama.cpp.git
 $ <span class="token builtin class-name">cd</span> llama.cpp
-$ <span class="token assign-left variable">HIPCXX</span><span class="token operator">=</span><span class="token string">"<span class="token variable"><span class="token variable">$(</span>hipconfig <span class="token parameter variable">-l</span><span class="token variable">)</span></span>/clang"</span> <span class="token assign-left variable">HIP_PATH</span><span class="token operator">=</span><span class="token string">"<span class="token variable"><span class="token variable">$(</span>hipconfig <span class="token parameter variable">-R</span><span class="token variable">)</span></span>"</span> <span class="token punctuation">\</span>
-    cmake <span class="token parameter variable">-S</span> <span class="token builtin class-name">.</span> <span class="token parameter variable">-B</span> build <span class="token parameter variable">-DGGML_HIP</span><span class="token operator">=</span>ON <span class="token parameter variable">-DGPU_TARGETS</span><span class="token operator">=</span>gfx1151 <span class="token parameter variable">-DCMAKE_BUILD_TYPE</span><span class="token operator">=</span>Release <span class="token punctuation">\</span>
-    <span class="token operator">&amp;&amp;</span> cmake <span class="token parameter variable">--build</span> build <span class="token parameter variable">--config</span> Release -- <span class="token parameter variable">-j</span> <span class="token number">16</span>  <span class="token comment"># 2m</span>
+$ <span class=
+"token assign-left variable">HIPCXX</span><span class="token operator">=</span><span class="token string">"<span class="token variable"><span class="token variable">$(</span>hipconfig <span class="token parameter variable">-l</span><span class="token variable">)</span></span>/clang"</span> <span class="token assign-left variable">HIP_PATH</span><span class="token operator">=</span><span class="token string">"<span class="token variable"><span class="token variable">$(</span>hipconfig <span class="token parameter variable">-R</span><span class="token variable">)</span></span>"</span> <span class="token punctuation">\</span>
+    cmake <span class=
+"token parameter variable">-S</span> <span class=
+"token builtin class-name">.</span> <span class=
+"token parameter variable">-B</span> build <span class=
+"token parameter variable">-DGGML_HIP</span><span class=
+"token operator">=</span>ON <span class=
+"token parameter variable">-DGPU_TARGETS</span><span class=
+"token operator">=</span>gfx1151 <span class=
+"token parameter variable">-DCMAKE_BUILD_TYPE</span><span class=
+"token operator">=</span>Release <span class=
+"token punctuation">\</span>
+    <span class="token operator">&amp;&</span> cmake <span class=
+"token parameter variable">--build</span> build <span class=
+"token parameter variable">--config</span> Release -- <span class=
+"token parameter variable">-j</span> <span class=
+"token number">16</span>  <span class="token comment"># 2m</span>
 </code></pre>
-    <p>For comparison, here's how the same hardware performs with llama.cpp:</p>
-    <table>
-      <thead>
-        <tr>
-          <th>Model</th>
-          <th>Quantization</th>
-          <th>Prompt t/s</th>
-          <th>Generation t/s</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Llama3-8B Coding</td>
-          <td>Q5_K_M</td>
-          <td>469.7</td>
-          <td>36.6</td>
-        </tr>
-        <tr>
-          <td>Qwen2.5-7B</td>
-          <td>Q4_K_M</td>
-          <td>289.7</td>
-          <td>30.5</td>
-        </tr>
-        <tr>
-          <td>Qwen3-14B</td>
-          <td>Q8_0</td>
-          <td>122.8</td>
-          <td>9.6</td>
-        </tr>
-        <tr>
-          <td>DeepSeek-R1-Distill-Qwen-32B</td>
-          <td>Q8_0</td>
-          <td>67.5</td>
-          <td>4.8</td>
-        </tr>
-        <tr>
-          <td>Qwen3-32B</td>
-          <td>Q8_0</td>
-          <td>47.5</td>
-          <td>3.1</td>
-        </tr>
-      </tbody>
-    </table>
-    <p>As expected, throughput scales almost entirely with model size. The system is primarily memory-bandwidth limited.
-    </p>
-    <h2 id="compared-to-an-old-desktop">Compared to an old desktop? </h2>
-    <p>Prior to building this machine, I would run smaller models on my daily-driver:</p>
-    <p><strong>CPU</strong> Intel i7-7700K @ 4.2 GHz<br>
-      <strong>RAM</strong> 16 GB DDR4 1066<br>
-      <strong>GPU</strong> GTX 1080<br>
-      <strong>GPU</strong> Memory 8GB<br>
-      <strong>GPU Memory Bandwidth</strong> 320 GB/s<br>
-      <strong>CUDA</strong> Cores 2560<br>
-      <strong>Tensor Cores</strong> 0<br>
-      <strong>Ray Tracing Cores</strong> 0
-    </p>
-    <p><strong>Benchmark Results Go Here</strong></p>
-    <p>The GTX 1080 might be the best GPU ever sold, but is a solid decade old at this point.</p>
-    <hr>
-    <h1 id="chapter-13---using-the-server">Chapter 13 - Using the Server </h1>
-    <p>I've built it. Now what?</p>
-    <p>Here's a list of tools I've tried out. I'm only providing a summary and calling out key configuration values.
-      Check the official docs for help installing them.</p>
-    <h2 id="openclaw">OpenClaw </h2>
-    <p>I'm running all of the "frontend" services on a different machine. I already have a dedicated linux machine, and
-      a desktop. Running the front-end "locally" makes accessing resources simpler (at least for my setup.)</p>
-    <p>OpenClaw can use DS4 as a custom OpenAI-compatible provider. The key configuration is in
-      <code>openclaw.json</code>:</p>
-    <pre data-role="codeBlock" data-info="json" class="language-json json"><code><span class="token punctuation">{</span>
-  <span class="token property">"models"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
-    <span class="token property">"providers"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
-      <span class="token property">"ds4"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
-        <span class="token property">"api"</span><span class="token operator">:</span> <span class="token string">"openai-completions"</span><span class="token punctuation">,</span>
-        <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"deepseek-v4-flash"</span><span class="token punctuation">,</span>
-        <span class="token property">"url"</span><span class="token operator">:</span> <span class="token string">"http://192.168.111.101:8000/v1/chat/completions"</span><span class="token punctuation">,</span>
-        <span class="token property">"maxTokens"</span><span class="token operator">:</span> <span class="token number">4096</span>
+<p>For comparison, here's how the same hardware performs with
+llama.cpp:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Quantization</th>
+<th>Prompt t/s</th>
+<th>Generation t/s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Llama3-8B Coding</td>
+<td>Q5_K_M</td>
+<td>469.7</td>
+<td>36.6</td>
+</tr>
+<tr>
+<td>Qwen2.5-7B</td>
+<td>Q4_K_M</td>
+<td>289.7</td>
+<td>30.5</td>
+</tr>
+<tr>
+<td>Qwen3-14B</td>
+<td>Q8_0</td>
+<td>122.8</td>
+<td>9.6</td>
+</tr>
+<tr>
+<td>DeepSeek-R1-Distill-Qwen-32B</td>
+<td>Q8_0</td>
+<td>67.5</td>
+<td>4.8</td>
+</tr>
+<tr>
+<td>Qwen3-32B</td>
+<td>Q8_0</td>
+<td>47.5</td>
+<td>3.1</td>
+</tr>
+</tbody>
+</table>
+<p>As expected, throughput scales almost entirely with model size.
+The system is primarily memory-bandwidth limited.</p>
+<h2 id="compared-to-an-old-desktop">Compared to an old
+desktop?</h2>
+<p>Prior to building this machine, I would run smaller models on my
+daily-driver:</p>
+<p><strong>CPU</strong> Intel i7-7700K @ 4.2 GHz<br>
+<strong>RAM</strong> 16 GB DDR4 1066<br>
+<strong>GPU</strong> GTX 1080<br>
+<strong>GPU</strong> Memory 8GB<br>
+<strong>GPU Memory Bandwidth</strong> 320 GB/s<br>
+<strong>CUDA</strong> Cores 2560<br>
+<strong>Tensor Cores</strong> 0<br>
+<strong>Ray Tracing Cores</strong> 0</p>
+<p><strong>Benchmark Results Go Here</strong></p>
+<p>The GTX 1080 might be the best GPU ever sold, but is a solid
+decade old at this point.</p>
+<hr>
+<h1 id="chapter-13---using-the-server">Chapter 13 - Using the
+Server</h1>
+<p>I've built it. Now what?</p>
+<p>Here's a list of tools I've tried out. I'm only providing a
+summary and calling out key configuration values. Check the
+official docs for help installing them.</p>
+<h2 id="openclaw">OpenClaw</h2>
+<p>I'm running all of the "frontend" services on a different
+machine. I already have a dedicated linux machine, and a desktop.
+Running the front-end "locally" makes accessing resources simpler
+(at least for my setup.)</p>
+<p>OpenClaw can use DS4 as a custom OpenAI-compatible provider. The
+key configuration is in <code>openclaw.json</code>:</p>
+<pre data-role="codeBlock" data-info="json" class=
+"language-json json"><code><span class="token punctuation">{</span>
+  <span class="token property">"models"</span><span class=
+"token operator">:</span> <span class="token punctuation">{</span>
+    <span class="token property">"providers"</span><span class=
+"token operator">:</span> <span class="token punctuation">{</span>
+      <span class="token property">"ds4"</span><span class=
+"token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"api"</span><span class=
+"token operator">:</span> <span class=
+"token string">"openai-completions"</span><span class=
+"token punctuation">,</span>
+        <span class="token property">"model"</span><span class=
+"token operator">:</span> <span class=
+"token string">"deepseek-v4-flash"</span><span class=
+"token punctuation">,</span>
+        <span class="token property">"url"</span><span class=
+"token operator">:</span> <span class=
+"token string">"http://192.168.111.101:8000/v1/chat/completions"</span><span class="token punctuation">,</span>
+        <span class="token property">"maxTokens"</span><span class=
+"token operator">:</span> <span class="token number">4096</span>
       <span class="token punctuation">}</span>
     <span class="token punctuation">}</span>
   <span class="token punctuation">}</span>
 <span class="token punctuation">}</span>
 </code></pre>
-    <p><strong>Critical: Set</strong> <code>maxTokens</code> <strong>explicitly.</strong> When left undefined, OpenClaw
-      defaults to a hyper-conservative 128-token cap. With agent-level prompts, 128 tokens isn't enough to finish a JSON
-      block or thinking sequence. Setting <code>maxTokens</code> to 2048 or 4096 lets the model finish naturally
-      (<code>finish=stop</code>), and subsequent turns hit <code>live kv cache hit</code> instead of <code>miss</code>,
-      dropping multi-turn response times from 40+ seconds to under 2 seconds.</p>
-    <h2 id="verification-1">Verification </h2>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>openclaw models status
+<p><strong>Critical: Set</strong> <code>maxTokens</code>
+<strong>explicitly.</strong> When left undefined, OpenClaw defaults
+to a hyper-conservative 128-token cap. With agent-level prompts,
+128 tokens isn't enough to finish a JSON block or thinking
+sequence. Setting <code>maxTokens</code> to 2048 or 4096 lets the
+model finish naturally (<code>finish=stop</code>), and subsequent
+turns hit <code>live kv cache hit</code> instead of
+<code>miss</code>, dropping multi-turn response times from 40+
+seconds to under 2 seconds.</p>
+<h2 id="verification-1">Verification</h2>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>openclaw models status
 openclaw gateway status
 </code></pre>
-    <h2 id="ide-integration-via-continue-vs-code--vscodium">IDE integration via Continue (VS Code / VSCodium) </h2>
-    <p>Just point it to your local DS4 endpoint:</p>
-    <pre data-role="codeBlock" data-info="json" class="language-json json"><code><span class="token punctuation">{</span>
-  <span class="token property">"models"</span><span class="token operator">:</span> <span class="token punctuation">[</span><span class="token punctuation">{</span>
-    <span class="token property">"title"</span><span class="token operator">:</span> <span class="token string">"DeepSeek V4 Flash (ds4)"</span><span class="token punctuation">,</span>
-    <span class="token property">"provider"</span><span class="token operator">:</span> <span class="token string">"openai"</span><span class="token punctuation">,</span>
-    <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"deepseek-v4-flash"</span><span class="token punctuation">,</span>
-    <span class="token property">"apiBase"</span><span class="token operator">:</span> <span class="token string">"http://localhost:8000/v1"</span><span class="token punctuation">,</span>
-    <span class="token property">"apiKey"</span><span class="token operator">:</span> <span class="token string">"thereisnokey"</span>
-  <span class="token punctuation">}</span><span class="token punctuation">]</span><span class="token punctuation">,</span>
-  <span class="token property">"tabAutocompleteModel"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
-    <span class="token property">"title"</span><span class="token operator">:</span> <span class="token string">"DeepSeek V4 Flash Autocomplete"</span><span class="token punctuation">,</span>
-    <span class="token property">"provider"</span><span class="token operator">:</span> <span class="token string">"openai"</span><span class="token punctuation">,</span>
-    <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"deepseek-v4-flash"</span><span class="token punctuation">,</span>
-    <span class="token property">"apiBase"</span><span class="token operator">:</span> <span class="token string">"http://localhost:8000/v1"</span><span class="token punctuation">,</span>
-    <span class="token property">"apiKey"</span><span class="token operator">:</span> <span class="token string">"icantypewhateveriwanthere"</span>
+<h2 id="ide-integration-via-continue-vs-code--vscodium">IDE
+integration via Continue (VS Code / VSCodium)</h2>
+<p>Just point it to your local DS4 endpoint:</p>
+<pre data-role="codeBlock" data-info="json" class=
+"language-json json"><code><span class="token punctuation">{</span>
+  <span class="token property">"models"</span><span class=
+"token operator">:</span> <span class=
+"token punctuation">[</span><span class=
+"token punctuation">{</span>
+    <span class="token property">"title"</span><span class=
+"token operator">:</span> <span class=
+"token string">"DeepSeek V4 Flash (ds4)"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"provider"</span><span class=
+"token operator">:</span> <span class=
+"token string">"openai"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"model"</span><span class=
+"token operator">:</span> <span class=
+"token string">"deepseek-v4-flash"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"apiBase"</span><span class=
+"token operator">:</span> <span class=
+"token string">"http://localhost:8000/v1"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"apiKey"</span><span class=
+"token operator">:</span> <span class=
+"token string">"thereisnokey"</span>
+  <span class="token punctuation">}</span><span class=
+"token punctuation">]</span><span class=
+"token punctuation">,</span>
+  <span class=
+"token property">"tabAutocompleteModel"</span><span class=
+"token operator">:</span> <span class="token punctuation">{</span>
+    <span class="token property">"title"</span><span class=
+"token operator">:</span> <span class=
+"token string">"DeepSeek V4 Flash Autocomplete"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"provider"</span><span class=
+"token operator">:</span> <span class=
+"token string">"openai"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"model"</span><span class=
+"token operator">:</span> <span class=
+"token string">"deepseek-v4-flash"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"apiBase"</span><span class=
+"token operator">:</span> <span class=
+"token string">"http://localhost:8000/v1"</span><span class=
+"token punctuation">,</span>
+    <span class="token property">"apiKey"</span><span class=
+"token operator">:</span> <span class=
+"token string">"icantypewhateveriwanthere"</span>
   <span class="token punctuation">}</span>
 <span class="token punctuation">}</span>
 </code></pre>
-    <h2 id="aider---ai-assistant-in-the-terminal">Aider - AI assistant in the terminal </h2>
-    <p>I haven't used this too much, but it works similar to the claude terminal app.</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token builtin class-name">export</span> <span class="token assign-left variable">OPENAI_API_BASE</span><span class="token operator">=</span><span class="token string">"http://localhost:8000/v1"</span>
-<span class="token builtin class-name">export</span> <span class="token assign-left variable">OPENAI_API_KEY</span><span class="token operator">=</span><span class="token string">"local-bypass"</span>
-aider <span class="token parameter variable">--model</span> openai/deepseek-v4-flash <span class="token parameter variable">--architect</span>
+<h2 id="aider---ai-assistant-in-the-terminal">Aider - AI assistant
+in the terminal</h2>
+<p>I haven't used this too much, but it works similar to the claude
+terminal app.</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code><span class=
+"token builtin class-name">export</span> <span class=
+"token assign-left variable">OPENAI_API_BASE</span><span class=
+"token operator">=</span><span class=
+"token string">"http://localhost:8000/v1"</span>
+<span class="token builtin class-name">export</span> <span class=
+"token assign-left variable">OPENAI_API_KEY</span><span class=
+"token operator">=</span><span class=
+"token string">"local-bypass"</span>
+aider <span class=
+"token parameter variable">--model</span> openai/deepseek-v4-flash <span class="token parameter variable">--architect</span>
 </code></pre>
-    <p>The <code>--architect</code> flag forces a two-step workflow: the model writes an implementation plan, waits for
-      approval, then executes edits.</p>
-    <h2 id="openwebui">OpenWebUI </h2>
-    <p>This is my favorite finding. This tool has excellent prompts, built in document storage, can associate several
-      chats to the same project for context sharing. I spend a lot of time in this tool</p>
-    <ul>
-      <li>
-        <p>Base URL: <code>http://localhost:8000/v1</code></p>
-      </li>
-      <li>
-        <p>API Key: <code>thereisnokey</code> (or any string - the server doesn't enforce auth)</p>
-      </li>
-    </ul>
-    <p>This gives you a full chat interface with streaming responses, conversation history management, tool calling
-      support, and model selection.</p>
-    <hr>
-    <h1 id="chapter-14---takeaways">Chapter 14 - Takeaways </h1>
-    <p>This was fun, was it worth it?</p>
-    <h2 id="memory-capacity-matters-more-than-flops">Memory Capacity Matters More Than FLOPS </h2>
-    <p>The single most important specification for local LLM inference is how much memory the GPU can address. A 128 GB
-      unified pool is worth more than an RTX 4090's 1,000+ GB/s bandwidth if the model doesn't fit in 24 GB VRAM. For
-      now bigger models are much more capable.</p>
-    <h2 id="there-are-optimizations-that-matter">There Are Optimizations That Matter. </h2>
-    <p>DS4 is less mature than llama.cpp, but its focused design delivers better results on the specific model and
-      hardware it targets. More importantly, the end product works for me.</p>
-    <h2 id="size-limitations">Size Limitations </h2>
-    <p>A 32B model at Q8 generates 3.1 t/s on this hardware. A 90B MoE model at 2/8 bit generates 14 t/s. The asymmetric
-      quantization makes the larger model faster. There are still use cases for other models, but I'll be using DS4
-      day-to-day.</p>
-    <h2 id="future-work">Future Work </h2>
-    <p><strong>Speculative decoding</strong> - I haven't tried this yet.</p>
-    <p><strong>Optimizing Context Windows and Cache</strong> - I picked, what I guessed, are reasonable defaults.</p>
-    <p><strong>Improved monitoring</strong> - I'm currently just plotting the exported metrics. There may be more
-      insightful ones (e.g. per process or per request utilization). Also KV cache usage.</p>
-    <p><strong>Multi-user serving experiments</strong> - The machine is, in theory, capable of handling multiple request
-      concurrently.</p>
-    <p><strong>ROCm profiling and optimization</strong> - There are a lot of knobs I haven't turned.</p>
-    <p><strong>RAM disk KV cache:</strong> - With 120+ GB usable RAM, moving <code>--kv-disk-dir</code> to tmpfs
-      eliminates SSD writes during context switching.</p>
-    <hr>
-    <h1 id="chapter-15---troubleshooting">Chapter 15 - Troubleshooting </h1>
-    <p>Here's a list of problems and errors that I ran into, and how I fixed it.</p>
-    <h2 id="hardware-issues">Hardware Issues </h2>
-    <p><strong>UMA Framebuffer Too Large</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> Less memory available to the model than expected, despite having 128 GB total.</p>
-      </li>
-      <li>
-        <p><em>Cause:</em> Large static framebuffer reservations reduce RAM available to Linux. ROCm allocates unified
-          memory dynamically through HSA.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Set UMA Frame Buffer Size to 512 MB (minimum).</p>
-      </li>
-    </ul>
-    <h2 id="kernel-issues">Kernel Issues </h2>
-    <p><strong>Building amdgpu as Built-in vs. Module</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> <code>Direct firmware load failed</code>, <code>Fatal error during GPU init</code></p>
-      </li>
-      <li>
-        <p><em>Cause:</em> Compiling amdgpu into the kernel directly causes firmware init before any drive is mounted
-          and firmware files are available.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Build amdgpu as a module (<code>=m</code>).</p>
-      </li>
-    </ul>
-    <h2 id="ds4-issues">DS4 Issues </h2>
-    <p><strong>Context Window Mismatch</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> <code>ds4-bench: prompt has 188 tokens, need at least --ctx-max=131072</code></p>
-      </li>
-      <li>
-        <p><em>Cause:</em> Prompt size plus allocated context exceeds limit.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Increase <code>--ctx-max</code> (e.g., 131500) or reduce <code>prefill_chunk</code> to 2048 or
-          1024.</p>
-      </li>
-    </ul>
-    <p><strong>KV Cache Miss Penalty</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> 32–42 second re-prefill on every turn (<code>live kv cache miss</code>).</p>
-      </li>
-      <li>
-        <p><em>Cause:</em> Token mismatch between live context and cached KV state.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Keep <code>maxTokens</code> high enough for <code>finish=stop</code>. Subsequent turns hit
-          <code>live kv cache hit</code> instead of <code>miss</code>.</p>
-      </li>
-    </ul>
-    <p><strong>Lock file</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> <code>ds4: failed to open lock file /tmp/ds4.lock: Permission denied</code></p>
-      </li>
-      <li>
-        <p><em>Cause:</em> DS4 places a lockfile in /tmp to prevent multiple instances running concurrently</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Delete or change permissions on <code>/tmp/ds4.lock</code></p>
-      </li>
-    </ul>
-    <h2 id="openclaw-issues">OpenClaw Issues </h2>
-    <p><strong>The 128-Token Truncation Death Loop</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> Every generation cut off at 128 tokens (<code>finish=length</code>), session resets, 30–42
-          second re-prefill penalty.</p>
-      </li>
-      <li>
-        <p><em>Cause:</em> OpenClaw's <code>maxTokens</code> defaults to 128 when undefined.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Set <code>maxTokens</code> to 2048–4096 in the provider config.</p>
-      </li>
-    </ul>
-    <p><strong>Reply Session Initialization Conflicted</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> <code>Error: reply session initialization conflicted for agent:main:main</code></p>
-      </li>
-      <li>
-        <p><em>Cause:</em> Concurrency race condition from repeated 128-token truncations.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Fix the 128-token cap first. The race condition disappears once generations complete naturally.
-        </p>
-      </li>
-    </ul>
-    <p><strong>Tool Recursion and Context Compaction</strong></p>
-    <ul>
-      <li>
-        <p><em>Symptom:</em> Unnecessary context growth and premature compaction.</p>
-      </li>
-      <li>
-        <p><em>Cause:</em> Large tool outputs inflate context beyond agent framework expectations.</p>
-      </li>
-      <li>
-        <p><em>Fix:</em> Restrict verbose tools with tool policies when not needed.</p>
-      </li>
-    </ul>
-    <hr>
-    <h1 id="appendix-a">Appendix A </h1>
-    <h2 id="kernel-parameters-reference">Kernel Parameters (Reference) </h2>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>amdgpu.gttsize=126976
+<p>The <code>--architect</code> flag forces a two-step workflow:
+the model writes an implementation plan, waits for approval, then
+executes edits.</p>
+<h2 id="openwebui">OpenWebUI</h2>
+<p>This is my favorite finding. This tool has excellent prompts,
+built in document storage, can associate several chats to the same
+project for context sharing. I spend a lot of time in this tool</p>
+<ul>
+<li>
+<p>Base URL: <code>http://localhost:8000/v1</code></p>
+</li>
+<li>
+<p>API Key: <code>thereisnokey</code> (or any string - the server
+doesn't enforce auth)</p>
+</li>
+</ul>
+<p>This gives you a full chat interface with streaming responses,
+conversation history management, tool calling support, and model
+selection.</p>
+<hr>
+<h1 id="chapter-14---takeaways">Chapter 14 - Takeaways</h1>
+<p>This was fun, was it worth it?</p>
+<h2 id="memory-capacity-matters-more-than-flops">Memory Capacity
+Matters More Than FLOPS</h2>
+<p>The single most important specification for local LLM inference
+is how much memory the GPU can address. A 128 GB unified pool is
+worth more than an RTX 4090's 1,000+ GB/s bandwidth if the model
+doesn't fit in 24 GB VRAM. For now bigger models are much more
+capable.</p>
+<h2 id="there-are-optimizations-that-matter">There Are
+Optimizations That Matter.</h2>
+<p>DS4 is less mature than llama.cpp, but its focused design
+delivers better results on the specific model and hardware it
+targets. More importantly, the end product works for me.</p>
+<h2 id="size-limitations">Size Limitations</h2>
+<p>A 32B model at Q8 generates 3.1 t/s on this hardware. A 90B MoE
+model at 2/8 bit generates 14 t/s. The asymmetric quantization
+makes the larger model faster. There are still use cases for other
+models, but I'll be using DS4 day-to-day.</p>
+<h2 id="future-work">Future Work</h2>
+<p><strong>Speculative decoding</strong> - I haven't tried this
+yet.</p>
+<p><strong>Optimizing Context Windows and Cache</strong> - I
+picked, what I guessed, are reasonable defaults.</p>
+<p><strong>Improved monitoring</strong> - I'm currently just
+plotting the exported metrics. There may be more insightful ones
+(e.g. per process or per request utilization). Also KV cache
+usage.</p>
+<p><strong>Multi-user serving experiments</strong> - The machine
+is, in theory, capable of handling multiple request
+concurrently.</p>
+<p><strong>ROCm profiling and optimization</strong> - There are a
+lot of knobs I haven't turned.</p>
+<p><strong>RAM disk KV cache:</strong> - With 120+ GB usable RAM,
+moving <code>--kv-disk-dir</code> to tmpfs eliminates SSD writes
+during context switching.</p>
+<hr>
+<h1 id="chapter-15---troubleshooting">Chapter 15 -
+Troubleshooting</h1>
+<p>Here's a list of problems and errors that I ran into, and how I
+fixed it.</p>
+<h2 id="hardware-issues">Hardware Issues</h2>
+<p><strong>UMA Framebuffer Too Large</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> Less memory available to the model than
+expected, despite having 128 GB total.</p>
+</li>
+<li>
+<p><em>Cause:</em> Large static framebuffer reservations reduce RAM
+available to Linux. ROCm allocates unified memory dynamically
+through HSA.</p>
+</li>
+<li>
+<p><em>Fix:</em> Set UMA Frame Buffer Size to 512 MB (minimum).</p>
+</li>
+</ul>
+<h2 id="kernel-issues">Kernel Issues</h2>
+<p><strong>Building amdgpu as Built-in vs. Module</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> <code>Direct firmware load failed</code>,
+<code>Fatal error during GPU init</code></p>
+</li>
+<li>
+<p><em>Cause:</em> Compiling amdgpu into the kernel directly causes
+firmware init before any drive is mounted and firmware files are
+available.</p>
+</li>
+<li>
+<p><em>Fix:</em> Build amdgpu as a module (<code>=m</code>).</p>
+</li>
+</ul>
+<h2 id="ds4-issues">DS4 Issues</h2>
+<p><strong>Context Window Mismatch</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> <code>ds4-bench: prompt has 188 tokens, need
+at least --ctx-max=131072</code></p>
+</li>
+<li>
+<p><em>Cause:</em> Prompt size plus allocated context exceeds
+limit.</p>
+</li>
+<li>
+<p><em>Fix:</em> Increase <code>--ctx-max</code> (e.g., 131500) or
+reduce <code>prefill_chunk</code> to 2048 or 1024.</p>
+</li>
+</ul>
+<p><strong>KV Cache Miss Penalty</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> 32–42 second re-prefill on every turn
+(<code>live kv cache miss</code>).</p>
+</li>
+<li>
+<p><em>Cause:</em> Token mismatch between live context and cached
+KV state.</p>
+</li>
+<li>
+<p><em>Fix:</em> Keep <code>maxTokens</code> high enough for
+<code>finish=stop</code>. Subsequent turns hit <code>live kv cache
+hit</code> instead of <code>miss</code>.</p>
+</li>
+</ul>
+<p><strong>Lock file</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> <code>ds4: failed to open lock file
+/tmp/ds4.lock: Permission denied</code></p>
+</li>
+<li>
+<p><em>Cause:</em> DS4 places a lockfile in /tmp to prevent
+multiple instances running concurrently</p>
+</li>
+<li>
+<p><em>Fix:</em> Delete or change permissions on
+<code>/tmp/ds4.lock</code></p>
+</li>
+</ul>
+<h2 id="openclaw-issues">OpenClaw Issues</h2>
+<p><strong>The 128-Token Truncation Death Loop</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> Every generation cut off at 128 tokens
+(<code>finish=length</code>), session resets, 30–42 second
+re-prefill penalty.</p>
+</li>
+<li>
+<p><em>Cause:</em> OpenClaw's <code>maxTokens</code> defaults to
+128 when undefined.</p>
+</li>
+<li>
+<p><em>Fix:</em> Set <code>maxTokens</code> to 2048–4096 in the
+provider config.</p>
+</li>
+</ul>
+<p><strong>Reply Session Initialization Conflicted</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> <code>Error: reply session initialization
+conflicted for agent:main:main</code></p>
+</li>
+<li>
+<p><em>Cause:</em> Concurrency race condition from repeated
+128-token truncations.</p>
+</li>
+<li>
+<p><em>Fix:</em> Fix the 128-token cap first. The race condition
+disappears once generations complete naturally.</p>
+</li>
+</ul>
+<p><strong>Tool Recursion and Context Compaction</strong></p>
+<ul>
+<li>
+<p><em>Symptom:</em> Unnecessary context growth and premature
+compaction.</p>
+</li>
+<li>
+<p><em>Cause:</em> Large tool outputs inflate context beyond agent
+framework expectations.</p>
+</li>
+<li>
+<p><em>Fix:</em> Restrict verbose tools with tool policies when not
+needed.</p>
+</li>
+</ul>
+<hr>
+<h1 id="appendix-a">Appendix A</h1>
+<h2 id="kernel-parameters-reference">Kernel Parameters
+(Reference)</h2>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>amdgpu.gttsize=126976
 ttm.pages_limit=32505856
 ttm.page_pool_size=32505856
 amdgpu.vm_fragment_size=9"
 </code></pre>
-    <hr>
-    <h2 id="benchmark-logs">Benchmark Logs </h2>
-    <p><strong>Put Benchmark Results Here</strong></p>
-    <pre data-role="codeBlock" data-info="" class="language-text"><code>Startup: model loads 90.9 GiB in ~20 seconds
+<hr>
+<h2 id="benchmark-logs">Benchmark Logs</h2>
+<p><strong>Put Benchmark Results Here</strong></p>
+<pre data-role="codeBlock" data-info="" class=
+"language-text"><code>Startup: model loads 90.9 GiB in ~20 seconds
 
 Prefill chunk (4096 tokens): 239.68 t/s
 Prefill chunk (8192 tokens): 224.47 t/s
@@ -1259,35 +1704,36 @@ Decoding chunk (50 tokens): 14.15 t/s
 Decoding chunk (50 tokens): 14.16 t/s
 Overall average (128 tokens): 14.15 t/s
 </code></pre>
-    <hr>
-    <h2 id="hardware-bom">Hardware BOM </h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Component</th>
-          <th>Price (as paid, before tax)</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td>Framework Desktop (128 GB RAM)</td>
-          <td>$3,500</td>
-        </tr>
-        <tr>
-          <td>Samsung 990 Pro 2TB</td>
-          <td>$370</td>
-        </tr>
-        <tr>
-          <td><strong>Total</strong></td>
-          <td><strong>$3,870</strong></td>
-        </tr>
-      </tbody>
-    </table>
-    <hr>
-    <h2 id="installed-packages">Installed packages </h2>
-    <p>Compile times given</p>
-    <p><strong>Basic system tools:</strong> - 7m39</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>app-admin/sudo
+<hr>
+<h2 id="hardware-bom">Hardware BOM</h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Price (as paid, before tax)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Framework Desktop (128 GB RAM)</td>
+<td>$3,500</td>
+</tr>
+<tr>
+<td>Samsung 990 Pro 2TB</td>
+<td>$370</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>$3,870</strong></td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="installed-packages">Installed packages</h2>
+<p>Compile times given</p>
+<p><strong>Basic system tools:</strong> - 7m39</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>app-admin/sudo
 app-editors/vim
 app-portage/gentoolkit
 dev-python/pip
@@ -1303,18 +1749,21 @@ sys-kernel/gentoo-sources
 sys-kernel/linux-firmware
 sys-process/time
 </code></pre>
-    <p><strong>Nice to have</strong> - 4m42</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>app-shells/bash-completion
+<p><strong>Nice to have</strong> - 4m42</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>app-shells/bash-completion
 app-text/tree
 sys-apps/moreutils
 sys-apps/the_silver_searcher
 sys-process/btop
 </code></pre>
-    <p><strong>Monitoring</strong> 1m17</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>app-metrics/node_exporter
+<p><strong>Monitoring</strong> 1m17</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>app-metrics/node_exporter
 </code></pre>
-    <p><strong>GPU packages</strong> 15m54</p>
-    <pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>dev-util/hip
+<p><strong>GPU packages</strong> 15m54</p>
+<pre data-role="codeBlock" data-info="bash" class=
+"language-bash bash"><code>dev-util/hip
 dev-util/hipcc
 dev-util/rocm_bandwidth_test
 sci-libs/hipBLAS
@@ -1322,11 +1771,8 @@ sci-libs/hipBLASLt
 sci-libs/hipCUB
 sci-libs/rocWMMA
 </code></pre>
-    <hr>
-    <p>Copyright: Matthew Macumber 2026</p>
-
-  </div>
-
+<hr>
+<p>Copyright: Matthew Macumber 2026</p>
+</div>
 </body>
-
 </html>
