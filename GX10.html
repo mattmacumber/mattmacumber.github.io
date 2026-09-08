@@ -1,0 +1,965 @@
+<!DOCTYPE html><html><head>
+      <title>GX10</title>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <link rel="stylesheet" href="book.css">
+    </head><body for="html-export">
+      <div class="crossnote markdown-preview  ">
+      
+<h1 id="building-a-private-ai-server--asus-ascent-gx10">Building a Private AI Server — ASUS Ascent GX10 </h1>
+<div class="crosslink">
+<p>This is the CUDA companion to the original Framework Desktop guide: <a href="index.html">Building a Private AI Server</a>.</p>
+</div>
+<h2 id="introduction">Introduction </h2>
+<p>This is the NVIDIA/ARM companion to "Building a Private AI Server". Same goals, same OS philosophy, same inference focus — different silicon.</p>
+<p>After my writeup on the Framework desktop, I was given access to an <strong>ASUS Ascent GX10</strong>, featuring NVIDIA's <strong>GB10 Grace Blackwell</strong> GPU with 128 GB of coherent unified LPDDR5x. It can run DeepSeek V4 Flash using antirez's DS4 inference engine (CUDA build) and exposes an OpenAI-compatible API to local development tools.</p>
+<p>While the Framework is ROCm and x86-64, the GX10 is CUDA on aarch64. This makes the software stack significantly differnt, but I'm keeping the same "understandable and maintainable" goal.</p>
+<p>Street price for the GX10 starts around <strong>$2,999</strong> (1 TB) before tax. For better or worse, storage is soldered in place. There are no aftermarket options, no real reason to open the case.</p>
+<hr>
+<h1 id="table-of-contents">Table of Contents </h1>
+<ul>
+<li><a href="#chapter-1---why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server?</a></li>
+<li><a href="#chapter-2---design-goals">Chapter 2 - Design Goals</a></li>
+<li><a href="#chapter-3---choosing-the-hardware">Chapter 3 - Choosing the Hardware</a></li>
+<li><a href="#chapter-4---a-bit-about-unified-memory">Chapter 4 - A Bit About Unified Memory</a></li>
+<li><a href="#chapter-5---storage">Chapter 5 - Storage</a></li>
+<li><a href="#chapter-6---bios--firmware-notes">Chapter 6 - BIOS / Firmware Notes</a></li>
+<li><a href="#chapter-7---operating-system">Chapter 7 - Operating System</a></li>
+<li><a href="#chapter-8---the-kernel">Chapter 8 - The Kernel</a></li>
+<li><a href="#chapter-9---nvidia-drivers-and-cuda">Chapter 9 - NVIDIA Drivers and CUDA</a></li>
+<li><a href="#chapter-10---gpu-monitoring-with-prometheus">Chapter 10 - GPU Monitoring with Prometheus</a></li>
+<li><a href="#chapter-11---ds4-the-inference-engine">Chapter 11 - DS4: The Inference Engine</a></li>
+<li><a href="#chapter-12---ds4-performance---work-in-progress">Chapter 12 - DS4 Performance - Work-in-Progress</a></li>
+<li><a href="#chapter-13---using-the-server">Chapter 13 - Using the Server</a></li>
+<li><a href="#chapter-14---takeaways">Chapter 14 - Takeaways</a></li>
+<li><a href="#chapter-15---troubleshooting">Chapter 15 - Troubleshooting</a></li>
+<li><a href="#appendix-a">Appendix A</a></li>
+</ul>
+<hr>
+<h1 id="chapter-1---why-build-a-private-ai-server">Chapter 1 - Why Build a Private AI Server? </h1>
+<p>I've spent nearly thirty years writing software, sometimes professionally. During the past year I've gone from dismissing LLMs as unreliable code generators to using them daily for research, code generation, debugging, documentation, and automation. The productivity gains for me are real, but consuming these models through cloud APIs has some problems for me:</p>
+<ul>
+<li>Usage-based pricing</li>
+<li>Internet dependency</li>
+<li>Vendor lock-in</li>
+<li>Privacy concerns</li>
+<li>Hidden prompts and changing model behavior</li>
+<li>Quotas</li>
+</ul>
+<p>Local inference removes most of those problems with some obvious downsides:</p>
+<ul>
+<li>Fixed Capabilities</li>
+<li>Higher upfront cost</li>
+<li>Limited compute capacity</li>
+<li>Responsibility for maintaining the software stack</li>
+</ul>
+<p>This is also a learning experience for me. I'm not really concerned with all dimensions of efficiency.</p>
+<h2 id="glossary-of-terms">Glossary of Terms </h2>
+<ul>
+<li><strong>AMD</strong> - Company that designs and sells CPUs and GPUs</li>
+<li><strong>ROCm</strong> - AMD's software stack for data processing built around HIP</li>
+<li><strong>HIP</strong> - C++ API and kernel language for AMD GPUs</li>
+<li><strong>Strix Halo</strong> - The code name for the AMD Ryzen AI Max+ chips</li>
+<li><strong>NVIDIA</strong> - A company that designs and sells GPUs (and now Grace CPU + Blackwell GPU packages)</li>
+<li><strong>CUDA</strong> - NVIDIA's proprietary API for general-purpose GPU computing</li>
+<li><strong>GB10</strong> - NVIDIA Grace Blackwell superchip: 20-core Arm CPU + Blackwell GPU, coherent unified memory</li>
+<li><strong>GX10</strong> - ASUS Ascent GX10: compact desktop AI box built on GB10 (same class as DGX Spark)</li>
+<li><strong>SBSA</strong> - Server Base System Architecture; the aarch64 Linux ABI used by CUDA toolkit runfiles for Grace</li>
+<li><strong>Vulkan</strong> - A cross-platform GPU API. Like OpenGL, but newer</li>
+<li><strong>Metal</strong> - Like Vulkan, but Apple-only</li>
+<li><strong>x86-64</strong> - The current Intel/AMD 64 bit instruction set</li>
+<li><strong>aarch64</strong> - The name for 64 bit ARM instruction set</li>
+</ul>
+<hr>
+<h1 id="chapter-2---design-goals">Chapter 2 - Design Goals </h1>
+<ul>
+<li>Runs (at least) one large model extremely well</li>
+<li>Runs whatever linux distro I want</li>
+<li>Minimal overhead</li>
+<li>Upstream software whenever practical</li>
+<li>Reproducible</li>
+<li>Easy upgrades</li>
+<li>Easy recovery</li>
+<li>Avoid vendor-specific software (skip DGX OS / NGC appliance layers where possible)</li>
+<li>Minimize black boxes</li>
+</ul>
+<p>My ideal upgrade process looks like this:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>ssh server
+cd software
+git pull
+make
+systemctl restart software
+</code></pre><p>Here's what I'm not considering: safety, security, local privacy.</p>
+<p>The end product will be open to anyone on your lan, documents and responses will be sent without encryption.</p>
+<p>This is only a "how to get it working" guide. There are a lot of other concerns that should cater to your particular needs and environment.</p>
+<hr>
+<h1 id="chapter-3---choosing-the-hardware">Chapter 3 - Choosing the Hardware </h1>
+<h2 id="candidates-considered">Candidates Considered </h2>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>CPU Arch</th>
+<th>Memory Type</th>
+<th>GPU Stack</th>
+<th>Key Pros</th>
+<th>Key Cons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Framework Desktop</td>
+<td>x86-64 (AMD Strix Halo)</td>
+<td>LPDDR5 (128 GB)</td>
+<td>ROCm</td>
+<td>Open ecosystem, x86-64, DIY</td>
+<td>Lower peak bandwidth than GB10</td>
+</tr>
+<tr>
+<td>Mac Studio</td>
+<td>M3 or M4 ARM</td>
+<td>(128 GB)</td>
+<td>Metal</td>
+<td>Excellent bandwidth</td>
+<td>Nearly impossible to find with 128 GB RAM</td>
+</tr>
+<tr>
+<td>Nvidia DGX Spark</td>
+<td>ARM (GB10)</td>
+<td>LPDDR5x (128 GB)</td>
+<td>CUDA</td>
+<td>Mature AI stack</td>
+<td>ARM-only, proprietary, reference chassis</td>
+</tr>
+<tr>
+<td><strong>ASUS Ascent GX10</strong></td>
+<td>ARM (GB10)</td>
+<td>LPDDR5x (128 GB)</td>
+<td>CUDA</td>
+<td>Same silicon as Spark, compact aluminum box, lower entry price</td>
+<td>ARM-only, proprietary drivers, fixed storage</td>
+</tr>
+</tbody>
+</table>
+<p>The Framework Desktop is covered in the <a href="https://mattmacumber.github.io/">companion guide</a>. This document is the GX10 path.</p>
+<h2 id="why-the-asus-ascent-gx10">Why the ASUS Ascent GX10 </h2>
+<p>The two machines are very similar at a high level.</p>
+<p><strong>GB10 Grace Blackwell</strong> — 20-core Arm (10× Cortex-X925 + 10× Cortex-A725) plus an integrated Blackwell GPU with 5th-gen Tensor Cores and FP4. Up to ~1 PFLOP of AI performance (vendor FP4 rating).</p>
+<p><strong>128 GB LPDDR5x coherent unified memory</strong> — Same magic number as the Framework build. Enough headroom for DeepSeek V4 Flash (~81 GB asymmetric quant) plus KV cache and OS. NVLink-C2C between Grace and Blackwell means no PCIe hop for tensors.</p>
+<p><strong>Memory bandwidth</strong> — Up to <strong>273 GB/s</strong>. Roughly double the Strix Halo peak bidirectional figure (~123 GB/s). Prefill-heavy workloads should benefit.</p>
+<p><strong>CUDA</strong> — The mature inference and tooling ecosystem. DS4, llama.cpp, and most research code assume CUDA first.</p>
+<p><strong>Form factor</strong> — 150 × 150 × 51 mm, ~240 W PD adapter. Smaller than the framework.</p>
+<p><strong>Tradeoffs</strong> — aarch64-only (no casual x86 binary reuse), proprietary NVIDIA stack, fixed storage, and Gentoo on arm64 + NVIDIA isn't "supported" by anyone.</p>
+<h2 id="why-128-gb-matters">Why 128 GB Matters </h2>
+<p>Running local models is a game of memory ceilings:</p>
+<table>
+<thead>
+<tr>
+<th>Model Size</th>
+<th>Example</th>
+<th>Fits in 128 GB?</th>
+<th>Fits in 32 GB?</th>
+<th>Fits in 16 GB?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7B (Q4)</td>
+<td>Llama 3 8B</td>
+<td>✓</td>
+<td>✓</td>
+<td>✓</td>
+</tr>
+<tr>
+<td>14B (Q4)</td>
+<td>Qwen 2.5 14B</td>
+<td>✓</td>
+<td>✗ / tight</td>
+<td>✗</td>
+</tr>
+<tr>
+<td>32B (Q8)</td>
+<td>Qwen 3 32B</td>
+<td>✓</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+<tr>
+<td>70B (Q4)</td>
+<td>Llama 2 70B</td>
+<td>✓</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+<tr>
+<td>90+ GB MoE (2/8 bit)</td>
+<td>DeepSeek V4 Flash</td>
+<td>Yes</td>
+<td>✗</td>
+<td>✗</td>
+</tr>
+</tbody>
+</table>
+<p>128 GB is the threshold where full-size frontier-class models become feasible on a single consumer-priced machine. Below that, you're limited to distilled or heavily quantized models.</p>
+<p>If one box isn't enough, GB10 platforms are designed to cluster over ConnectX-7 (e.g. two GX10s for larger MoE footprints). That's a future experiment, if someone want to lend me another one.</p>
+<h2 id="better-alternatives-than-following-this-guide">Better alternatives than following this guide </h2>
+<ul>
+<li>If you only run 7B models: use a discrete GPU on a PC you already own.</li>
+<li>If you need many concurrent users: multiple discrete GPUs (or a real server) is simpler.</li>
+<li>If you just want a chat bot: find a small model that runs on hardware you already have.</li>
+<li>If you want x86 + open GPU stack: follow the <a href="https://mattmacumber.github.io/">Framework / Strix Halo guide</a> instead.</li>
+<li>If you want the vendor path with least pain: install NVIDIA DGX OS and live in their container/tooling world.</li>
+</ul>
+<hr>
+<h1 id="chapter-4---a-bit-about-unified-memory">Chapter 4 - A Bit About Unified Memory </h1>
+<p>This is the architectural feature that makes the entire project possible. Consider how data is copied in a traditional discrete GPU setup.</p>
+<h2 id="traditional-discrete-gpu-setup">Traditional Discrete GPU Setup </h2>
+<p>The memory on the GPU is fast, but limited (e.g. 24 GB). For a modest sized model, every inference step can require shuttling data over the PCIe bus. Model weights, KV cache, and intermediate activations all compete for the same VRAM. Maintaining performance with larger models requires multiple GPUs.</p>
+<h2 id="unified-memory-grace--blackwell">Unified Memory (Grace + Blackwell) </h2>
+<p>On GB10, the Grace CPU and Blackwell GPU share a coherent LPDDR5x pool joined by <strong>NVLink-C2C</strong>. The GPU can address system memory without a classic PCIe copy for every tensor:</p>
+<ul>
+<li>A ~90 GB model fits without splitting or streaming</li>
+<li>KV cache lives alongside model weights without VRAM starvation</li>
+<li>No PCIe transfer overhead for attention traffic</li>
+<li>Programming model is CUDA on a coherent address space (still NVIDIA-shaped, not HSA)</li>
+</ul>
+<p>The bandwidth tradeoff vs discrete cards still exists: flagship GDDR/HBM GPUs can exceed 1,000 GB/s unidirectional. GB10 peaks around <strong>273 GB/s</strong> — lower than discrete flagships, higher than Strix Halo's ~123 GB/s bidirectional peak. For prompt processing (parallel, bandwidth-limited), discrete GPUs still win on raw throughput. For large-context generation where capacity matters, unified memory wins by letting the model fit at all.</p>
+<hr>
+<h1 id="chapter-5---storage">Chapter 5 - Storage </h1>
+<h2 id="understanding-the-workload---why-random-iops-matter">Understanding the workload - Why Random IOPS Matter </h2>
+<p>Flash storage is usually graded by sequential write speed. A fast NVMe drive can hit 7500 MB/s. Modern high-context LLM engines can treat disk as a dynamic cache tier, continuously reading and writing KV history states during long sessions. For the software I'm interested in, the KV persistence layer is limited by random IO. Sequential throughput is nice when loading models, but the runtime limitation is random read/writes.</p>
+<h2 id="what-you-get-on-the-gx10">What you get on the GX10 </h2>
+<p>ASUS ships fixed-capacity NVMe (1, 2 or 4 TB). It is noticably slower than the Samsung SSD I chose for the Framework.</p>
+<p>In this install the internal drive showed up as:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>Disk /dev/nvme0n1: 1.82 TiB
+Disk model: ESL02TBTLCZ-27J2-TYN
+</code></pre><p>Factory GPT layout (kept as-is):</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>/dev/nvme0n1p1   298M EFI System
+/dev/nvme0n1p2   1.8T Linux filesystem
+</code></pre><p>No dedicated swap partition in this layout. With 128 GB RAM and a headless inference box, hopefully there's no need. We can also create a "swapfile" if that turns out to be beneficial.</p>
+<h2 id="filesystem-why-xfs">Filesystem: Why XFS </h2>
+<p>When all cores are processing inference or concurrent agent scripts, filesystem metadata contention can become a real bottleneck. Under heavy parallel metadata workloads, XFS generally scales better than ext4. ZFS is excellent but RAM-hungry — that RAM should go to inference, not ARC.</p>
+<hr>
+<h1 id="chapter-6---bios--firmware-notes">Chapter 6 - BIOS / Firmware Notes </h1>
+<h2 id="disable-the-hardware-watchdog">Disable the hardware watchdog </h2>
+<p><strong>Do this first.</strong> Disable the watchdog timer. I was experiencing random reboot during long inferrence tasks. I though I had faulty hardware until I found it in the BIOS.</p>
+<h2 id="other-settings-worth-checking">Other settings worth checking </h2>
+<ul>
+<li><strong>Secure Boot</strong> — Disabled, Lets me boot the software I want, without having to ask permission.</li>
+<li><strong>Fast Boot</strong> — Disabled, makes it easier to catch the boot process.</li>
+<li><strong>Power resume</strong> — What to do in the event of a power failure.</li>
+</ul>
+<p>Unlike Strix Halo, there is no "UMA framebuffer size" knob that lets you shift memory between "main" RAM and VRAM. Coherent unified memory on GB10 is handled by the NVIDIA stack, not an AMD UMA reservation.</p>
+<hr>
+<h1 id="chapter-7---operating-system">Chapter 7 - Operating System </h1>
+<h2 id="philosophy">Philosophy </h2>
+<p>A great OS doesn't do things you don't want. The choice depends on how much control you need and how much maintenance you're willing to accept.</p>
+<h2 id="candidates">Candidates </h2>
+<table>
+<thead>
+<tr>
+<th>Distro</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NVIDIA DGX OS</td>
+<td>Vendor path. Fastest to "CUDA works." Lots of extra junk.</td>
+</tr>
+<tr>
+<td>Ubuntu aarch64</td>
+<td>Common on Spark-class boxes; good NVIDIA packaging.</td>
+</tr>
+<tr>
+<td>Fedora / Debian</td>
+<td>Fine; adjust package names.</td>
+</tr>
+<tr>
+<td><strong>Gentoo</strong></td>
+<td>Pick init, kernel, USE flags; pin libraries; learn every sharp edge.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-pick">The Pick </h2>
+<p>Gentoo, systemd profile, arm64. Same rationale as the Framework guide: control and reproducibility over convenience.</p>
+<p><strong>Install media note:</strong> I used the <strong>NixOS</strong> installer to bootstrap the system. The native Gentoo live image was broken for aarch64 at install time.</p>
+<h2 id="partitioning">Partitioning </h2>
+<p>The existing GPT layout works for me:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>/dev/nvme0n1p1   298M EFI System
+/dev/nvme0n1p2   1.8T Linux filesystem (XFS root)
+</code></pre><p>Mount plan:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>/dev/nvme0n1p2  →  /
+/dev/nvme0n1p1  →  /efi
+</code></pre><h2 id="filesystem-mkfsxfs">Filesystem: mkfs.XFS </h2>
+<p>I'm using the lts optoins Gentto provides for xfs formatting options:</p>
+<p><strong>xfs.conf</strong></p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>[metadata]
+bigtime=1
+crc=1
+finobt=1
+inobtcount=1
+metadir=0
+reflink=1
+rmapbt=1
+
+[inode]
+sparse=1
+nrext64=1
+exchange=1
+
+[naming]
+parent=1
+</code></pre><p>Format (add <code>-f</code> if an existing filesystem is recognized):</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>mkfs.xfs <span class="token parameter variable">-s</span> <span class="token assign-left variable">size</span><span class="token operator">=</span><span class="token number">4096</span> <span class="token parameter variable">-b</span> <span class="token assign-left variable">size</span><span class="token operator">=</span><span class="token number">4096</span> <span class="token parameter variable">-c</span> <span class="token assign-left variable">options</span><span class="token operator">=</span>xfs.conf /dev/nvme0n1p2
+</code></pre><p>Mount:</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">mkdir</span> <span class="token parameter variable">-p</span> /mnt/gentoo
+<span class="token function">mount</span> /dev/nvme0n1p2 /mnt/gentoo
+<span class="token function">mkdir</span> <span class="token parameter variable">-p</span> /mnt/gentoo/efi
+<span class="token function">mount</span> /dev/nvme0n1p1 /mnt/gentoo/efi
+<span class="token builtin class-name">cd</span> /mnt/gentoo
+<span class="token function">date</span>   <span class="token comment"># sanity-check clock before TLS downloads</span>
+</code></pre><h2 id="stage3">Stage3 </h2>
+<p>Plain <strong>arm64 systemd</strong> stage3 (update the autobuild timestamp to whatever is current):</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">curl</span> <span class="token parameter variable">-o</span> stage3-arm64-systemd.tar.xz <span class="token punctuation">\</span>
+  https://distfiles.gentoo.org/releases/arm64/autobuilds/20260830T234553Z/stage3-arm64-systemd-20260830T234553Z.tar.xz
+<span class="token function">curl</span> <span class="token parameter variable">-o</span> stage3-arm64-systemd.tar.xz.sha256 <span class="token punctuation">\</span>
+  https://distfiles.gentoo.org/releases/arm64/autobuilds/20260830T234553Z/stage3-arm64-systemd-20260830T234553Z.tar.xz.sha256
+</code></pre><p>Check the checksum</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">cat</span> stage3-arm64-systemd.tar.xz.sha256
+sha256sum stage3-arm64-systemd.tar.xz
+</code></pre><p>"Install"</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">tar</span> xpvf stage3-*.tar.xz --xattrs-include<span class="token operator">=</span><span class="token string">'*.*'</span> --numeric-owner <span class="token parameter variable">-C</span> /mnt/gentoo
+</code></pre><h2 id="makeconf--interesting-parts">make.conf — interesting parts </h2>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>COMMON_FLAGS="-march=native -O2 -pipe"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+FCFLAGS="${COMMON_FLAGS}"
+FFLAGS="${COMMON_FLAGS}"
+RUSTFLAGS="${RUSTFLAGS} -C target-cpu=native"
+
+MAKEOPTS="-j20"
+
+USE="llvm clang threads python ssl zstd lz4 aio acl unicode kernel-install kmod openssl resolvconf -X -wayland -opengl -gtk -qt6 -kde -gnome -pulseaudio -perl"
+
+# NO AMD HERE
+GRUB_PLATFORMS="efi-64"
+PYTHON_SINGLE_TARGET="python3_13"
+PYTHON_TARGETS="python3_13"
+</code></pre><p>Notes vs the Framework guide:</p>
+<ul>
+<li><code>-j20</code> matches the 20-core Grace CPU.</li>
+<li>There is no <code>AMDGPU_TARGETS</code>. GPU enablement is NVIDIA via Portage <code>VIDEO_CARDS</code> and the proprietary driver.</li>
+</ul>
+<h2 id="chroot-bootstrap">Chroot bootstrap </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">cp</span> <span class="token parameter variable">--dereference</span> /etc/resolv.conf /mnt/gentoo/etc/
+
+<span class="token function">mount</span> <span class="token parameter variable">--types</span> proc /proc /mnt/gentoo/proc
+<span class="token function">mount</span> <span class="token parameter variable">--rbind</span> /sys /mnt/gentoo/sys
+<span class="token function">mount</span> --make-rslave /mnt/gentoo/sys
+<span class="token function">mount</span> <span class="token parameter variable">--rbind</span> /dev /mnt/gentoo/dev
+<span class="token function">mount</span> --make-rslave /mnt/gentoo/dev
+<span class="token function">mount</span> <span class="token parameter variable">--bind</span> /run /mnt/gentoo/run
+<span class="token function">mount</span> --make-slave /mnt/gentoo/run
+
+<span class="token function">chroot</span> /mnt/gentoo /bin/bash
+<span class="token builtin class-name">source</span> /etc/profile
+<span class="token builtin class-name">export</span> <span class="token assign-left variable"><span class="token environment constant">PS1</span></span><span class="token operator">=</span><span class="token string">"(chroot) <span class="token variable">${<span class="token environment constant">PS1</span>}</span>"</span>
+
+emerge-webrsync
+<span class="token comment"># optional might speed up downloads</span>
+emerge <span class="token parameter variable">--ask</span> <span class="token parameter variable">--verbose</span> <span class="token parameter variable">--oneshot</span> app-portage/mirrorselect <span class="token operator">&amp;&amp;</span> mirrorselect <span class="token parameter variable">-i</span> <span class="token parameter variable">-o</span> <span class="token operator">&gt;&gt;</span> /etc/portage/make.conf
+
+emerge <span class="token parameter variable">--sync</span>
+</code></pre><h2 id="profile-and-cpu-flags">Profile and CPU flags </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>eselect profile list
+eselect profile <span class="token builtin class-name">set</span> <span class="token number">12</span>   <span class="token comment"># default/linux/arm64/23.0/systemd (stable) — verify the number hasn't changed</span>
+
+emerge <span class="token parameter variable">--ask</span> <span class="token parameter variable">--oneshot</span> app-portage/cpuid2cpuflags
+
+<span class="token comment"># Manually running this should spit out:</span>
+<span class="token comment"># CPU_FLAGS_ARM: edsp neon neon-fp16 thumb vfp vfpv3 vfpv4 vfp-d32 aes sha1 sha2 crc32 sm4 asimd asimddp asimdfhm asimdhp sve sve2 i8mm v4 v5 v6 v7 v8 thumb2</span>
+
+<span class="token builtin class-name">echo</span> <span class="token string">"*/* <span class="token variable"><span class="token variable">$(</span>cpuid2cpuflags<span class="token variable">)</span></span>"</span> <span class="token operator">&gt;</span> /etc/portage/package.use/00cpu-flags
+<span class="token builtin class-name">echo</span> <span class="token string">"*/* VIDEO_CARDS: -* nvidia"</span> <span class="token operator">&gt;&gt;</span> /etc/portage/package.use/nvidia
+</code></pre><h2 id="world-update">World update </h2>
+<p>First <code>@world</code> is mostly compilers compiling compilers — budget ~80+ minutes:</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">--ask</span> <span class="token parameter variable">--verbose</span> <span class="token parameter variable">--update</span> <span class="token parameter variable">--deep</span> --changed-use @world
+emerge <span class="token parameter variable">--ask</span> <span class="token parameter variable">--depclean</span>
+</code></pre><h2 id="locale">Locale </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">nano</span> <span class="token parameter variable">-w</span> /etc/locale.gen    <span class="token comment"># enable en_US.UTF-8</span>
+locale-gen
+eselect locale list
+eselect locale <span class="token builtin class-name">set</span> <span class="token number">4</span>       <span class="token comment"># en_US.UTF-8 — verify</span>
+env-update <span class="token operator">&amp;&amp;</span> <span class="token builtin class-name">source</span> /etc/profile
+</code></pre><h2 id="bootloader-package">Bootloader package </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">-aUND</span> grub
+</code></pre><h2 id="firmware-licenses--installkernel">Firmware licenses + installkernel </h2>
+<p><code>/etc/portage/package.license</code>:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>sys-kernel/linux-firmware linux-fw-redistributable
+sys-kernel/linux-firmware @BINARY-REDISTRIBUTABLE
+</code></pre><p><code>/etc/portage/package.use/kernel</code>:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>sys-kernel/installkernel dracut
+</code></pre><pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">--ask</span> sys-kernel/linux-firmware sys-kernel/gentoo-sources sys-kernel/dracut
+</code></pre><h2 id="accounts-network-fstab-before-first-reboot">Accounts, network, fstab (before first reboot) </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">passwd</span>
+<span class="token builtin class-name">echo</span> nvidia <span class="token operator">&gt;</span> /etc/hostname
+hostnamectl <span class="token function">hostname</span> nvidia
+
+emerge <span class="token parameter variable">-aUND</span> <span class="token function">sudo</span>
+visudo   <span class="token comment"># allow the wheel group to sudo</span>
+<span class="token function">useradd</span> <span class="token parameter variable">-G</span> wheel <span class="token parameter variable">-m</span> <span class="token parameter variable">-s</span> /bin/bash macumber
+</code></pre><p>Setup  <code>/etc/fstab</code>:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>/dev/nvme0n1p1  /efi  vfat  defaults  1 2
+/dev/nvme0n1p2  /     xfs   defaults  0 1
+</code></pre><p>Some people prefer UUIDs, but the storage in this machine is fixed.</p>
+<p>Turn on dhcp for all wired network interfaces</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code># /etc/systemd/network/20-wired.network
+[Match]
+Name=en*
+
+[Network]
+DHCP=yes
+</code></pre><pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>systemctl <span class="token builtin class-name">enable</span> dhcpcd.service          <span class="token comment"># if using dhcpcd</span>
+systemctl <span class="token builtin class-name">enable</span> sshd.service
+systemctl <span class="token builtin class-name">enable</span> systemd-timesyncd.service
+</code></pre><p>GRUB root cmdline (set UUID of the root filesystem):</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token assign-left variable">P2</span><span class="token operator">=</span><span class="token variable"><span class="token variable">$(</span>blkid <span class="token parameter variable">-o</span> value <span class="token parameter variable">-s</span> UUID /dev/nvme0n1p2<span class="token variable">)</span></span>
+<span class="token comment"># /etc/default/grub</span>
+<span class="token assign-left variable">GRUB_CMDLINE_LINUX</span><span class="token operator">=</span><span class="token string">"root=UUID=<span class="token variable">${P2}</span> init=/lib/systemd/systemd"</span>
+</code></pre><h2 id="packages-i-want-and-need">Packages I want and need </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">-aUND</span> <span class="token punctuation">\</span>
+  app-admin/sudo <span class="token punctuation">\</span>
+  app-editors/vim <span class="token punctuation">\</span>
+  app-metrics/node_exporter <span class="token punctuation">\</span>
+  app-misc/screen <span class="token punctuation">\</span>
+  app-portage/gentoolkit <span class="token punctuation">\</span>
+  app-shells/bash-completion <span class="token punctuation">\</span>
+  app-text/tree <span class="token punctuation">\</span>
+  dev-python/pip <span class="token punctuation">\</span>
+  dev-vcs/git <span class="token punctuation">\</span>
+  net-misc/dhcpcd <span class="token punctuation">\</span>
+  sys-apps/moreutils <span class="token punctuation">\</span>
+  sys-apps/portage <span class="token punctuation">\</span>
+  sys-apps/systemd <span class="token punctuation">\</span>
+  sys-apps/the_silver_searcher <span class="token punctuation">\</span>
+  sys-block/io-scheduler-udev-rules <span class="token punctuation">\</span>
+  sys-boot/grub <span class="token punctuation">\</span>
+  sys-fs/dosfstools <span class="token punctuation">\</span>
+  sys-fs/ntfs3g <span class="token punctuation">\</span>
+  sys-fs/xfsprogs <span class="token punctuation">\</span>
+  sys-kernel/linux-firmware <span class="token punctuation">\</span>
+  sys-process/btop <span class="token punctuation">\</span>
+  sys-process/time
+
+systemctl <span class="token builtin class-name">enable</span> node_exporter
+eclean-dist
+</code></pre><hr>
+<h1 id="chapter-8---the-kernel">Chapter 8 - The Kernel </h1>
+<h2 id="source-and-firmware">Source and firmware </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">-a</span> sys-kernel/linux-firmware sys-kernel/gentoo-sources sys-kernel/dracut
+</code></pre><h2 id="custom-kernel-build">Custom kernel build </h2>
+<p>GB10 needs a current aarch64 kernel with NVMe, EFI stub/GRUB, and modules suitable for NVIDIA proprietary drivers. I'm no expert on ARM machines, and every model seems intentionally different enough to be incompatiable. As a bit of a shortcut I grabbed a copy of the Fedora aarch64 config:</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">wget</span> https://src.fedoraproject.org/rpms/kernel/raw/rawhide/f/kernel-aarch64-fedora.config
+<span class="token function">mv</span> kernel-aarch64-fedora.config /usr/src/linux/
+
+<span class="token builtin class-name">cd</span> /usr/src/linux
+<span class="token function">make</span> oldconfig
+
+<span class="token function">make</span> <span class="token parameter variable">-j20</span>          <span class="token comment"># ~9 minutes on this box</span>
+<span class="token function">make</span> modules_install
+<span class="token function">make</span> <span class="token function">install</span>
+
+dracut <span class="token parameter variable">--force</span> <span class="token parameter variable">--kver</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span><span class="token function">make</span> kernelrelease<span class="token variable">)</span></span>"</span>
+<span class="token function">grub-mkconfig</span> <span class="token parameter variable">-o</span> /boot/grub/grub.cfg
+grub-install --efi-directory<span class="token operator">=</span>/efi
+</code></pre><p>We will install NVIDIA drivers and rebuild the initramfs again so <code>nouveau</code> is omitted and NVIDIA modprobe config is included (Chapter 9).</p>
+<h2 id="verification-after-reboot">Verification after reboot </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">uname</span> <span class="token parameter variable">-r</span>
+lsblk
+<span class="token function">ip</span> a
+systemctl status sshd
+</code></pre><hr>
+<h1 id="chapter-9---nvidia-drivers-and-cuda">Chapter 9 - NVIDIA Drivers and CUDA </h1>
+<p>This chapter replaces "ROCm and hipcc" from the Framework guide. Most of this is just arcane incantations to please the NViDA gods.</p>
+<h2 id="portage-keywords-use-licenses">Portage keywords, USE, licenses </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> <span class="token function">tee</span> /etc/portage/package.accept_keywords/nvidia <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+x11-drivers/nvidia-drivers ~arm64
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/portage/package.use/nvidia <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+*/* VIDEO_CARDS: -* nvidia
+x11-drivers/nvidia-drivers -X -tools -wayland -static-libs persistenced modules modules-sign
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">tee</span> <span class="token parameter variable">-a</span> /etc/portage/package.license <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+x11-drivers/nvidia-drivers NVIDIA-2025
+dev-util/nvidia-cuda-toolkit NVIDIA-CUDA
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">mkdir</span> <span class="token parameter variable">-p</span> /etc/portage/profile
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/portage/profile/use.mask <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+-cuda
+EOF</span>
+</code></pre><h2 id="modprobe-defaults">Modprobe defaults </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> <span class="token function">mkdir</span> <span class="token parameter variable">-p</span> /etc/modprobe.d
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/modprobe.d/nvidia.conf <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+blacklist nouveau
+options nvidia NVreg_RestrictProfilingToAdminUsers=0
+options nvidia-drm modeset=1
+EOF</span>
+
+<span class="token function">sudo</span> gpasswd <span class="token parameter variable">-a</span> cursor video   <span class="token comment"># or your login user</span>
+<span class="token function">sudo</span> emerge <span class="token parameter variable">-v</span> x11-drivers/nvidia-drivers
+</code></pre><p>If Portage leaves <code>_cfg0000_nvidia.conf</code>, keep that file as <code>/etc/modprobe.d/nvidia.conf</code> and ensure it still contains:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>options nvidia NVreg_RestrictProfilingToAdminUsers=0
+</code></pre><h2 id="load-the-driver">Load the driver </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> rmmod nouveau
+<span class="token function">sudo</span> modprobe nvidia
+<span class="token function">sudo</span> modprobe nvidia-uvm
+<span class="token function">sudo</span> modprobe nvidia-modeset
+<span class="token function">sudo</span> modprobe nvidia-drm
+
+<span class="token function">sudo</span> <span class="token function">mknod</span> <span class="token parameter variable">-m</span> <span class="token number">666</span> /dev/nvidiactl c <span class="token number">195</span> <span class="token number">255</span>
+<span class="token function">sudo</span> <span class="token function">mknod</span> <span class="token parameter variable">-m</span> <span class="token number">666</span> /dev/nvidia0 c <span class="token number">195</span> <span class="token number">0</span>
+<span class="token function">sudo</span> <span class="token function">mknod</span> <span class="token parameter variable">-m</span> <span class="token number">666</span> /dev/nvidia-modeset c <span class="token number">195</span> <span class="token number">254</span>
+</code></pre><p>Check that we can recognize and get performance details from our hardware</p>
+<pre data-role="codeBlock" data-info="" class="language-text"><code>sudo nvidia-smi
+</code></pre><h2 id="boot-persistence--modules-dracut-device-nodes">Boot persistence — modules, dracut, device nodes </h2>
+<p>This is the tricky bit. There are slicker ways to handle this, but I kept running into the unkindness of NViDA software. We're just giving udev some explicit help.</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> <span class="token function">tee</span> /etc/modules-load.d/nvidia.conf <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+nvidia
+nvidia-uvm
+nvidia-modeset
+nvidia-drm
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">mkdir</span> <span class="token parameter variable">-p</span> /etc/dracut.conf.d
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/dracut.conf.d/nvidia.conf <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+omit_drivers+=" nouveau nova_core "
+install_items+=" /etc/modprobe.d/nvidia.conf "
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">tee</span> /usr/local/sbin/nvidia-create-devices.sh <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+#!/bin/bash
+set -euo pipefail
+modprobe nvidia 2&gt;/dev/null || true
+modprobe nvidia-uvm 2&gt;/dev/null || true
+modprobe nvidia-modeset 2&gt;/dev/null || true
+modprobe nvidia-drm 2&gt;/dev/null || true
+/usr/bin/nvidia-modprobe -c 0 -u &gt;/dev/null 2&gt;&amp;1 || true
+major_nvidia=$(awk '$2=="nvidia"{print $1}' /proc/devices | head -n1)
+major_ctl=$(awk '$2=="nvidiactl"{print $1}' /proc/devices | head -n1)
+major_modeset=$(awk '$2=="nvidia-modeset"{print $1}' /proc/devices | head -n1)
+major_uvm=$(awk '$2=="nvidia-uvm"{print $1}' /proc/devices | head -n1)
+[[ -n "${major_ctl:-}" ]] || major_ctl="${major_nvidia:-}"
+[[ -n "${major_modeset:-}" ]] || major_modeset="${major_nvidia:-}"
+[[ -n "${major_nvidia:-}" &amp;&amp; ! -e /dev/nvidia0 ]] &amp;&amp; mknod -m 666 /dev/nvidia0 c "${major_nvidia}" 0
+[[ -n "${major_ctl:-}" &amp;&amp; ! -e /dev/nvidiactl ]] &amp;&amp; mknod -m 666 /dev/nvidiactl c "${major_ctl}" 255
+[[ -n "${major_modeset:-}" &amp;&amp; ! -e /dev/nvidia-modeset ]] &amp;&amp; mknod -m 666 /dev/nvidia-modeset c "${major_modeset}" 254
+[[ -n "${major_uvm:-}" &amp;&amp; ! -e /dev/nvidia-uvm ]] &amp;&amp; mknod -m 666 /dev/nvidia-uvm c "${major_uvm}" 0
+[[ -n "${major_uvm:-}" &amp;&amp; ! -e /dev/nvidia-uvm-tools ]] &amp;&amp; mknod -m 666 /dev/nvidia-uvm-tools c "${major_uvm}" 1
+exit 0
+EOF</span>
+<span class="token function">sudo</span> <span class="token function">chmod</span> <span class="token number">755</span> /usr/local/sbin/nvidia-create-devices.sh
+
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/systemd/system/nvidia-devices.service <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+[Unit]
+Description=Create NVIDIA device nodes for GB10
+After=systemd-modules-load.service
+Before=nvidia-persistenced.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/nvidia-create-devices.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">mkdir</span> <span class="token parameter variable">-p</span> /etc/systemd/system/nvidia-persistenced.service.d
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/systemd/system/nvidia-persistenced.service.d/override.conf <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+[Unit]
+After=nvidia-devices.service systemd-modules-load.service
+Requires=nvidia-devices.service
+EOF</span>
+
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/udev/rules.d/70-nvidia.rules <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x10de", ATTR{class}=="0x030000", RUN+="/usr/local/sbin/nvidia-create-devices.sh"
+KERNEL=="nvidia", RUN+="/usr/local/sbin/nvidia-create-devices.sh"
+KERNEL=="nvidia_uvm", RUN+="/usr/local/sbin/nvidia-create-devices.sh"
+EOF</span>
+
+<span class="token function">sudo</span> systemctl daemon-reload
+<span class="token function">sudo</span> systemctl <span class="token builtin class-name">enable</span> <span class="token parameter variable">--now</span> nvidia-devices.service nvidia-persistenced.service
+<span class="token function">sudo</span> dracut <span class="token parameter variable">-f</span> <span class="token parameter variable">--kver</span> <span class="token string">"<span class="token variable"><span class="token variable">$(</span><span class="token function">uname</span> <span class="token parameter variable">-r</span><span class="token variable">)</span></span>"</span>
+</code></pre><h2 id="cuda-133-toolkit-and-only-the-toolkit">CUDA 13.3 toolkit (and only the toolkit) </h2>
+<p>Do <strong>not</strong> install the driver from the CUDA runfile; We're doing that ourselves.</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">mkdir</span> <span class="token parameter variable">-p</span> ~/nvidia-llm-stack
+<span class="token builtin class-name">cd</span> ~/nvidia-llm-stack
+
+<span class="token function">curl</span> <span class="token parameter variable">-o</span> cuda_13.3.1_610.43.02_linux_sbsa.run <span class="token punctuation">\</span>
+  <span class="token string">"https://developer.download.nvidia.com/compute/cuda/13.3.1/local_installers/cuda_13.3.1_610.43.02_linux_sbsa.run"</span>
+
+<span class="token function">sudo</span> <span class="token function">sh</span> cuda_13.3.1_610.43.02_linux_sbsa.run <span class="token parameter variable">--silent</span> <span class="token parameter variable">--toolkit</span> <span class="token parameter variable">--override</span> --no-man-page
+
+<span class="token function">sudo</span> <span class="token function">tee</span> /etc/profile.d/cuda.sh <span class="token operator">&gt;</span>/dev/null <span class="token operator">&lt;&lt;</span><span class="token string">'EOF'
+export PATH="/usr/local/cuda/bin:${PATH}"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export CUDA_HOME="/usr/local/cuda"
+export CUDAARCHS="121"
+export TORCH_CUDA_ARCH_LIST="12.1"
+EOF</span>
+
+<span class="token builtin class-name">echo</span> <span class="token string">'/usr/local/cuda/lib64'</span> <span class="token operator">|</span> <span class="token function">sudo</span> <span class="token function">tee</span> /etc/ld.so.conf.d/cuda-13-3.conf
+<span class="token function">sudo</span> ldconfig
+</code></pre><p><code>CUDAARCHS=121</code> / <code>TORCH_CUDA_ARCH_LIST=12.1</code> target Blackwell</p>
+<h2 id="extra-native-tools">Extra native tools </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> emerge <span class="token parameter variable">-v</span> dev-python/uv
+</code></pre><h2 id="check">Check </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> nvidia-smi
+<span class="token builtin class-name">source</span> /etc/profile.d/cuda.sh
+nvcc <span class="token parameter variable">--version</span>
+</code></pre><hr>
+<h1 id="chapter-10---gpu-monitoring-with-prometheus">Chapter 10 - GPU Monitoring with Prometheus </h1>
+<p>Instrument early so you have a baseline before chasing inference regressions.</p>
+<h2 id="node_exporter">node_exporter </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>emerge <span class="token parameter variable">-a</span> app-metrics/node_exporter
+<span class="token function">sudo</span> systemctl <span class="token builtin class-name">enable</span> <span class="token parameter variable">--now</span> node_exporter
+</code></pre><h2 id="nvidia-metrics">NVIDIA metrics </h2>
+<p>On the AMD box, a small Go exporter scraped <code>/sys</code> for GPU stats. Someone has already done that for NViDIA:</p>
+<ul>
+<li><code>nvidia-smi</code> for interactive checks</li>
+<li><code>nvidia_gpu_exporter</code> to expose those metrics to prometheus</li>
+</ul>
+<p>Test:</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">curl</span> http://localhost:9100/metrics <span class="token operator">|</span> <span class="token function">head</span>
+nvidia-smi
+</code></pre><p><strong>Note:</strong> I ran into an issue where the node-exporter would hang when attempting to read cpufrequency metrics. It looks like there is an upstream fix. I turned them off in the meantime.</p>
+<hr>
+<h1 id="chapter-11---ds4-the-inference-engine">Chapter 11 - DS4: The Inference Engine </h1>
+<h2 id="why-ds4">Why DS4? </h2>
+<p>Same rationale as the Framework guide:</p>
+<ul>
+<li><strong>llama.cpp</strong> — excellent generalist; breadth over depth on any single architecture</li>
+<li><strong>vLLM</strong> — datacenter multi-user serving; overkill for a single-user headless box</li>
+<li><strong>LM Studio</strong> — great for exploration; more overhead for always-on serving</li>
+<li><strong>DS4 (DwarfStar 4)</strong> — optimized for DeepSeek V4's MLA, compressed KV, and MoE routing on 128 GB+ machines, including SSD-backed KV state</li>
+</ul>
+<h2 id="the-model">The Model </h2>
+<p>DeepSeek V4 Flash uses asymmetric quantization — dense attention / router / shared experts at 8-bit, MoE blocks at 2-bit — landing around <strong>~81 GB</strong>. It fits in the 128 GB pool with headroom for KV, disk cache, and OS. Target a 128K context window and an OpenAI-compatible API.</p>
+<h2 id="build-for-gb10-cuda">Build for GB10 (CUDA) </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">git</span> clone https://github.com/antirez/ds4.git
+<span class="token builtin class-name">cd</span> ds4
+<span class="token function">make</span> cuda-spark
+</code></pre><h2 id="llamacpp">llama.cpp </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">git</span> clone https://github.com/ggml-org/llama.cpp.git
+<span class="token builtin class-name">cd</span> llama.cpp
+cmake <span class="token parameter variable">-B</span> build <span class="token parameter variable">-DGGML_CUDA</span><span class="token operator">=</span>ON
+cmake <span class="token parameter variable">--build</span> build <span class="token parameter variable">--config</span> Release
+</code></pre><h2 id="download-the-models">Download the model(s) </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token comment"># ~81 GB on disk — standard 2-bit routed experts</span>
+./download_model.sh q2-imatrix
+
+<span class="token comment"># Optional ~98 GB — last 6 layers use q4 routed experts</span>
+./download_model.sh q2-q4-imatrix
+
+<span class="token comment"># Optional ~3.5 GB speculative decoding / MTP draft</span>
+./download_model.sh mtp
+</code></pre><h2 id="smoke-test">Smoke test </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>./ds4-agent <span class="token parameter variable">-p</span> <span class="token string">"Who is the coolest Robot?"</span>
+<span class="token comment"># Expect CUDA backend init on the GB10 GPU and a short reply</span>
+</code></pre><h2 id="systemd-service">systemd service </h2>
+<p><code>/etc/systemd/system/ds4.service</code>:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>[Unit]
+Description=DS4 LLM Service
+After=network-online.target nvidia-devices.service
+Requires=nvidia-devices.service
+
+[Service]
+Environment=PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+Environment=LD_LIBRARY_PATH=/usr/local/cuda/lib64
+ExecStart=/home/macumber/ds4/ds4-server --cuda -m /home/macumber/ds4/gguf/DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix.gguf --host 0.0.0.0 --ctx 131072 --kv-disk-dir /home/macumber/.ds4/server-kv --kv-disk-space-mb 27648
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+</code></pre><p>Confirm the exact CUDA flag name with <code>./ds4-server --help</code> on your build (<code>--cuda</code> vs whatever <code>make cuda-spark</code> wires up).</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token function">sudo</span> systemctl daemon-reload
+<span class="token function">sudo</span> systemctl <span class="token builtin class-name">enable</span> <span class="token parameter variable">--now</span> ds4
+</code></pre><hr>
+<h1 id="chapter-12---ds4-performance---work-in-progress">Chapter 12 - DS4 Performance - Work-in-Progress </h1>
+<h2 id="methodology">Methodology </h2>
+<p>Fill this in once you have stable numbers. Suggested header for every bench log:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>Machine: ASUS Ascent GX10 (NVIDIA GB10 Grace Blackwell)
+Memory: 128 GB coherent LPDDR5x (~273 GB/s peak)
+Kernel: (uname -r)
+Driver / CUDA: nvidia-smi + nvcc --version
+Model: DeepSeek V4 Flash (asymmetric Q8_0 / Q2_0)
+Prompt length: 9,370 tokens for prefill
+Generation length: 128 tokens for decode
+Temperature: 0
+</code></pre><h2 id="launch-configuration">Launch configuration </h2>
+<p>Mirror the Framework defaults unless memory pressure says otherwise:</p>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code>./ds4-server <span class="token punctuation">\</span>
+    <span class="token parameter variable">--cuda</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">--ctx</span> <span class="token number">131072</span> <span class="token punctuation">\</span>
+    --kv-disk-dir ~/ds4-kv <span class="token punctuation">\</span>
+    --kv-disk-space-mb <span class="token number">27648</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">--tokens</span> <span class="token number">8192</span>
+</code></pre><h3 id="kv-cache-sizing-same-math-as-the-amd-guide">KV cache sizing (same math as the AMD guide) </h3>
+<p>DeepSeek V4 MLA compresses KV to roughly ~14.5 KiB per token:</p>
+<ul>
+<li>128K context ≈ ~1.8 GB in memory</li>
+<li><code>--kv-disk-space-mb 27648</code> ≈ ~15 warm 128K threads before eviction</li>
+</ul>
+<h2 id="bandwidth-expectations">Bandwidth expectations </h2>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Peak memory bandwidth (ballpark)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Strix Halo (Framework)</td>
+<td>~123 GB/s bidirectional</td>
+</tr>
+<tr>
+<td>GB10 / GX10</td>
+<td>~273 GB/s</td>
+</tr>
+<tr>
+<td>Discrete flagship (e.g. 4090-class)</td>
+<td>1000+ GB/s GDDR</td>
+</tr>
+</tbody>
+</table>
+<p>Prefill should benefit vs Strix Halo; decode will still be capacity and architecture-bound.</p>
+<h2 id="benchmark-loop-same-scripts">Benchmark loop (same scripts) </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token keyword keyword-for">for</span> <span class="token for-or-select variable">m</span> <span class="token keyword keyword-in">in</span> ./ds4/gguf/DeepSeek-V4-Flash-*<span class="token punctuation">;</span> <span class="token keyword keyword-do">do</span>
+  <span class="token function">time</span> ./ds4/ds4 --prefill-chunk <span class="token number">1024</span> <span class="token parameter variable">-m</span> <span class="token string">"<span class="token variable">$m</span>"</span> --prompt-file ~/enigma.txt
+<span class="token keyword keyword-done">done</span> <span class="token operator"><span class="token file-descriptor important">2</span>&gt;</span><span class="token file-descriptor important">&amp;1</span> <span class="token operator">|</span> <span class="token function">tee</span> <span class="token parameter variable">-a</span> ~/<span class="token string">"<span class="token variable">$F</span>"</span>
+
+<span class="token keyword keyword-for">for</span> <span class="token for-or-select variable">m</span> <span class="token keyword keyword-in">in</span> ./ds4/gguf/*gguf ./models/*gguf<span class="token punctuation">;</span> <span class="token keyword keyword-do">do</span>
+  ./llama.cpp/build/bin/llama-bench <span class="token punctuation">\</span>
+    <span class="token parameter variable">-m</span> <span class="token string">"<span class="token variable">$m</span>"</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">-ngl</span> <span class="token number">999</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">-p</span> <span class="token number">512,2048</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">-n</span> <span class="token number">128</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">-d</span> <span class="token number">0,4096</span>,8192 <span class="token punctuation">\</span>
+    <span class="token parameter variable">-fa</span> <span class="token number">0,1</span> <span class="token punctuation">\</span>
+    <span class="token parameter variable">-r</span> <span class="token number">5</span> <span class="token punctuation">\</span>
+    --main-gpu <span class="token number">0</span> <span class="token punctuation">\</span>
+    --split-mode none <span class="token punctuation">\</span>
+    <span class="token parameter variable">-o</span> csv
+<span class="token keyword keyword-done">done</span>
+</code></pre><p><code>enigma.txt</code> = Wikipedia "Enigma machine" article text + <code>Write a 1024 word explanation of the Enigma.</code></p>
+<h2 id="power-and-thermals">Power and thermals </h2>
+<p>GX10 uses a ~240 W USB-C PD adapter and a dense vapor-chamber cooler. Log idle / prefill / decode watts and temps with <code>nvidia-smi</code> once the stack is warm. Expect a louder, denser thermal envelope than a Noctua-cooled Framework tower — still desktop-class, not silent.</p>
+<h2 id="water-consumption">Water Consumption </h2>
+<p>By the machine, None. I consumed half a gallon waiting for various things to compile.</p>
+<hr>
+<h1 id="chapter-13---using-the-server">Chapter 13 - Using the Server </h1>
+<p>Same client story as the Framework guide: keep frontends on another machine if you want; point them at the GX10's OpenAI-compatible endpoint.</p>
+<h2 id="openclaw">OpenClaw </h2>
+<pre data-role="codeBlock" data-info="json" class="language-json json"><code><span class="token punctuation">{</span>
+  <span class="token property">"models"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+    <span class="token property">"providers"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+      <span class="token property">"ds4"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+        <span class="token property">"api"</span><span class="token operator">:</span> <span class="token string">"openai-completions"</span><span class="token punctuation">,</span>
+        <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"deepseek-v4-flash"</span><span class="token punctuation">,</span>
+        <span class="token property">"url"</span><span class="token operator">:</span> <span class="token string">"http://&lt;ip&gt;:8000/v1/chat/completions"</span><span class="token punctuation">,</span>
+        <span class="token property">"maxTokens"</span><span class="token operator">:</span> <span class="token number">4096</span>
+      <span class="token punctuation">}</span>
+    <span class="token punctuation">}</span>
+  <span class="token punctuation">}</span>
+<span class="token punctuation">}</span>
+</code></pre><p><strong>Critical:</strong> Set <code>maxTokens</code> explicitly. Undefined defaults to a hyper-conservative 128-token cap, which truncates agent turns and forces expensive KV cache misses on every reply.</p>
+<h2 id="continue-vs-code--vscodium">Continue (VS Code / VSCodium) </h2>
+<pre data-role="codeBlock" data-info="json" class="language-json json"><code><span class="token punctuation">{</span>
+  <span class="token property">"models"</span><span class="token operator">:</span> <span class="token punctuation">[</span><span class="token punctuation">{</span>
+    <span class="token property">"title"</span><span class="token operator">:</span> <span class="token string">"DeepSeek V4 Flash (ds4)"</span><span class="token punctuation">,</span>
+    <span class="token property">"provider"</span><span class="token operator">:</span> <span class="token string">"openai"</span><span class="token punctuation">,</span>
+    <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"deepseek-v4-flash"</span><span class="token punctuation">,</span>
+    <span class="token property">"apiBase"</span><span class="token operator">:</span> <span class="token string">"http://&lt;ip&gt;:8000/v1"</span><span class="token punctuation">,</span>
+    <span class="token property">"apiKey"</span><span class="token operator">:</span> <span class="token string">"thereisnokey"</span>
+  <span class="token punctuation">}</span><span class="token punctuation">]</span><span class="token punctuation">,</span>
+  <span class="token property">"tabAutocompleteModel"</span><span class="token operator">:</span> <span class="token punctuation">{</span>
+    <span class="token property">"title"</span><span class="token operator">:</span> <span class="token string">"DeepSeek V4 Flash Autocomplete"</span><span class="token punctuation">,</span>
+    <span class="token property">"provider"</span><span class="token operator">:</span> <span class="token string">"openai"</span><span class="token punctuation">,</span>
+    <span class="token property">"model"</span><span class="token operator">:</span> <span class="token string">"deepseek-v4-flash"</span><span class="token punctuation">,</span>
+    <span class="token property">"apiBase"</span><span class="token operator">:</span> <span class="token string">"http://&lt;ip&gt;:8000/v1"</span><span class="token punctuation">,</span>
+    <span class="token property">"apiKey"</span><span class="token operator">:</span> <span class="token string">"icantypewhateveriwanthere"</span>
+  <span class="token punctuation">}</span>
+<span class="token punctuation">}</span>
+</code></pre><h2 id="aider">Aider </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token builtin class-name">export</span> <span class="token assign-left variable">OPENAI_API_BASE</span><span class="token operator">=</span><span class="token string">"http://&lt;ip&gt;:8000/v1"</span>
+<span class="token builtin class-name">export</span> <span class="token assign-left variable">OPENAI_API_KEY</span><span class="token operator">=</span><span class="token string">"monkeybutt"</span>
+aider <span class="token parameter variable">--model</span> openai/deepseek-v4-flash <span class="token parameter variable">--architect</span>
+</code></pre><h2 id="openwebui">OpenWebUI </h2>
+<ul>
+<li>Base URL: <code>http://&lt;ip&gt;:8000/v1</code></li>
+<li>API Key: ifIHadABoat</li>
+</ul>
+<hr>
+<h1 id="chapter-14---takeaways">Chapter 14 - Takeaways </h1>
+<h2 id="memory-capacity-still-matters-more-than-flops">Memory capacity still matters more than FLOPS </h2>
+<p>128 GB coherent unified memory is the feature that makes DeepSeek V4 Flash practical on a desk. The GX10 adds higher bandwidth and a CUDA-first software world compared with Strix Halo.</p>
+<h2 id="cuda-is-the-path-of-least-resistance-for-models--not-for-gentoo">CUDA is the path of least resistance for models — not for Gentoo </h2>
+<p>Getting <code>nvidia-smi</code> healthy on arm64 Gentoo is the hard part (device nodes, nouveau blacklisting, SBSA toolkit, persistenced ordering). Past that, the app layer is all the same.</p>
+<h2 id="two-boxes-two-stacks">Two boxes, two stacks </h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Framework Desktop</th>
+<th>ASUS Ascent GX10</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Arch</td>
+<td>x86-64</td>
+<td>aarch64</td>
+</tr>
+<tr>
+<td>GPU stack</td>
+<td>ROCm / HIP</td>
+<td>CUDA</td>
+</tr>
+<tr>
+<td>Peak BW</td>
+<td>~123 GB/s</td>
+<td>~273 GB/s</td>
+</tr>
+<tr>
+<td>OS friction</td>
+<td>AMD firmware + HSA knobs</td>
+<td>NVIDIA modules + device nodes</td>
+</tr>
+<tr>
+<td>Repurposing</td>
+<td>Easy x86 general PC</td>
+<td>Not sure it is good for anything else</td>
+</tr>
+</tbody>
+</table>
+<h2 id="future-work">Future work </h2>
+<ul>
+<li>Prefill and decode numbers vs the Framework box</li>
+<li>Speculative decoding / MTP on CUDA</li>
+</ul>
+<hr>
+<h1 id="chapter-15---troubleshooting">Chapter 15 - Troubleshooting </h1>
+<h2 id="hardware-issues">Hardware Issues </h2>
+<h3 id="watchdog-induced-reboots">Watchdog-induced reboots </h3>
+<p><strong>Symptom:</strong> Random reboots during compiles, driver loads, or long inference.</p>
+<p><strong>Cause:</strong> Hardware watchdog left enabled.</p>
+<p><strong>Fix:</strong> Disable watchdog in BIOS/firmware (Chapter 6). This was a day-one fix on this machine.</p>
+<h3 id="secure-boot-blocks-custom-kernel--drivers">Secure Boot blocks custom kernel / drivers </h3>
+<p><strong>Symptom:</strong> System refuses to boot Gentoo GRUB or NVIDIA modules fail policy checks.</p>
+<p><strong>Fix:</strong> Disable Secure Boot for this install path.</p>
+<h2 id="install-media-issues">Install media Issues </h2>
+<h3 id="gentoo-live-iso-fails-on-gx10">Gentoo live ISO fails on GX10 </h3>
+<p><strong>Symptom:</strong> Native Gentoo live environment is unusable for partitioning / stage3.</p>
+<p><strong>Fix:</strong> Boot a <strong>NixOS</strong> ISO (or another known-good aarch64 live image) and proceed with the Gentoo chroot install from there.</p>
+<h2 id="nvidia-issues">NVIDIA Issues </h2>
+<h3 id="nouveau-owns-the-gpu">nouveau owns the GPU </h3>
+<p><strong>Symptom:</strong> <code>nvidia</code> module fails to bind; <code>nvidia-smi</code> missing devices.</p>
+<p><strong>Fix:</strong> Blacklist nouveau, <code>rmmod nouveau</code>, load <code>nvidia</code> / <code>nvidia-uvm</code> / <code>nvidia-modeset</code> / <code>nvidia-drm</code>, rebuild dracut with <code>omit_drivers+=" nouveau nova_core "</code>.</p>
+<h3 id="missing-devnvidia-nodes">Missing <code>/dev/nvidia*</code> nodes </h3>
+<p><strong>Symptom:</strong> Modules loaded but CUDA apps fail to open devices.</p>
+<p><strong>Fix:</strong> Run <code>/usr/local/sbin/nvidia-create-devices.sh</code> and enable <code>nvidia-devices.service</code> before <code>nvidia-persistenced</code>.</p>
+<h3 id="portage-_cfg0000_nvidiaconf-surprise">Portage <code>_cfg0000_nvidia.conf</code> surprise </h3>
+<p><strong>Symptom:</strong> Custom modprobe options disappear after emerge.</p>
+<p><strong>Fix:</strong> Promote the <code>_cfg*</code> file to <code>/etc/modprobe.d/nvidia.conf</code> and re-add <code>NVreg_RestrictProfilingToAdminUsers=0</code>.</p>
+<h3 id="cuda-runfile-tries-to-ship-a-driver">CUDA runfile tries to ship a driver </h3>
+<p><strong>Symptom:</strong> Toolkit installer wants to replace kernel modules.</p>
+<p><strong>Fix:</strong> Use <code>--toolkit</code> only (as in Chapter 9). Keep drivers on Portage.</p>
+<h2 id="kernel--boot-issues">Kernel / boot Issues </h2>
+<h3 id="root-not-found--nvme-missing-in-initramfs">Root not found / NVMe missing in initramfs </h3>
+<p><strong>Symptom:</strong> Emergency shell on first boot.</p>
+<p><strong>Fix:</strong> <code>dracut --force --kver … --add-drivers "nvme nvme_core"</code> and verify <code>root=</code> UUID in <code>GRUB_CMDLINE_LINUX</code>.</p>
+<h2 id="ds4--client-issues">DS4 / client Issues </h2>
+<p>Same as the Framework guide:</p>
+<ul>
+<li><strong>Context too small</strong> — raise <code>--ctx</code> / <code>--ctx-max</code> or shrink prefill chunks</li>
+<li><strong>KV cache miss tax</strong> — keep client <code>maxTokens</code> high enough for <code>finish=stop</code></li>
+<li><strong><code>/tmp/ds4.lock</code> permission denied</strong> — remove or fix permissions on the lock file</li>
+<li><strong>OpenClaw 128-token death loop</strong> — set <code>maxTokens</code> to 2048–4096</li>
+</ul>
+<hr>
+<h1 id="appendix-a">Appendix A </h1>
+<h2 id="cuda-env-reference">CUDA env (reference) </h2>
+<pre data-role="codeBlock" data-info="bash" class="language-bash bash"><code><span class="token builtin class-name">export</span> <span class="token assign-left variable"><span class="token environment constant">PATH</span></span><span class="token operator">=</span><span class="token string">"/usr/local/cuda/bin:<span class="token variable">${<span class="token environment constant">PATH</span>}</span>"</span>
+<span class="token builtin class-name">export</span> <span class="token assign-left variable">LD_LIBRARY_PATH</span><span class="token operator">=</span><span class="token string">"/usr/local/cuda/lib64<span class="token variable">${LD_LIBRARY_PATH<span class="token operator">:+</span><span class="token operator">:</span>${LD_LIBRARY_PATH}</span>}"</span>
+<span class="token builtin class-name">export</span> <span class="token assign-left variable">CUDA_HOME</span><span class="token operator">=</span><span class="token string">"/usr/local/cuda"</span>
+<span class="token builtin class-name">export</span> <span class="token assign-left variable">CUDAARCHS</span><span class="token operator">=</span><span class="token string">"121"</span>
+<span class="token builtin class-name">export</span> <span class="token assign-left variable">TORCH_CUDA_ARCH_LIST</span><span class="token operator">=</span><span class="token string">"12.1"</span>
+</code></pre><h2 id="hardware-bom-approximate-street-pricing">Hardware BOM (approximate street pricing) </h2>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Notes</th>
+<th>Price (approx, before tax)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ASUS Ascent GX10 2 TB</td>
+<td>Same silicon, more NVMe</td>
+<td>~$3,499</td>
+</tr>
+</tbody>
+</table>
+<p>Pick capacity at purchase; there are no upgrades.</p>
+<h2 id="installed-package-sets-from-install-notes">Installed package sets (from install notes) </h2>
+<p>System / niceties:</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>sys-block/io-scheduler-udev-rules
+app-editors/vim
+app-admin/sudo
+app-portage/gentoolkit
+app-shells/bash-completion
+app-text/tree
+app-misc/screen
+app-metrics/node_exporter
+dev-python/pip
+dev-python/uv
+dev-vcs/git
+net-misc/dhcpcd
+sys-apps/moreutils
+sys-apps/the_silver_searcher
+sys-boot/grub
+sys-fs/dosfstools
+sys-fs/ntfs3g
+sys-fs/xfsprogs
+sys-kernel/gentoo-sources
+sys-kernel/linux-firmware
+sys-kernel/dracut
+sys-process/btop
+sys-process/time
+x11-drivers/nvidia-drivers
+</code></pre><h2 id="benchmark-logs">Benchmark Logs </h2>
+<p>Put GX10 results here.</p>
+<pre data-role="codeBlock" data-info="text" class="language-text text"><code>Startup: (fill in)
+Prefill: (fill in)
+Decode: (fill in)
+nvidia-smi under load: (fill in)
+</code></pre>
+<p>Copyright: Matthew Macumber 2026</p>
+
+      </div>
+      
+      
+    
+    
+    
+    
+    
+    
+  
+    </body></html>

@@ -204,6 +204,20 @@ table tr:nth-child(2n) {
   background-color: #f6f8fa;
 }
 
+/* Cross-guide notice */
+.crosslink {
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  background-color: #ddf4ff;
+  border: 1px solid #54aeff66;
+  border-radius: 6px;
+  color: #1f2328;
+}
+
+.crosslink p {
+  margin: 0;
+}
+
 /* Blockquotes / Callouts */
 blockquote {
   padding: 0 1em;
